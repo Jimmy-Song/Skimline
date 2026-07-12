@@ -1,0 +1,26 @@
+{
+  "_note": "这是 YouTube 观看页里 window.ytInitialPlayerResponse 中与字幕相关的部分的样本，用于让 Codex 编写并单元测试“选字幕轨道”的逻辑。真实结构与此一致。选轨道规则：优先选非翻译的原语言/英文轨道（含 kind=asr 自动字幕），不要选 YouTube 的翻译轨道。",
+  "captions": {
+    "playerCaptionsTracklistRenderer": {
+      "captionTracks": [
+        {
+          "baseUrl": "https://www.youtube.com/api/timedtext?v=EXAMPLE123&caps=asr&kind=asr&lang=en",
+          "name": { "simpleText": "English (auto-generated)" },
+          "vssId": "a.en",
+          "languageCode": "en",
+          "kind": "asr",
+          "isTranslatable": true
+        },
+        {
+          "baseUrl": "https://www.youtube.com/api/timedtext?v=EXAMPLE123&lang=en",
+          "name": { "simpleText": "English" },
+          "vssId": ".en",
+          "languageCode": "en",
+          "isTranslatable": true
+        }
+      ],
+      "translationLanguages": [],
+      "defaultAudioTrackIndex": 0
+    }
+  }
+}

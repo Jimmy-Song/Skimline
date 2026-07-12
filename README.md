@@ -2,22 +2,11 @@
 
 > Skim any long video.
 
-Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中，把 YouTube 长访谈、播客和演讲整理成可展开、可跳转的简体中文观点地图。原生 JavaScript、无后端，DeepSeek API Key 只保存在用户本机的 `chrome.storage.local`。
+Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中，把 YouTube 长访谈、播客和演讲整理成可展开、可跳转的观点地图。摘要语言可在生成前选择，也可以在生成过程中切换。原生 JavaScript、无后端，DeepSeek API Key 只保存在用户本机的 `chrome.storage.local`。
 
 ## 下载与安装
 
-### 方式 A：直接下载可安装版本
-
-1. 打开仓库中的 `releases/skimline-0.1.0-extension.zip`。
-2. 点击 `Download raw file` 下载 ZIP。
-3. 解压 ZIP。
-4. 打开 Chrome，在地址栏输入 `chrome://extensions`。
-5. 打开右上角“开发者模式”。
-6. 点击“加载已解压的扩展程序”，选择解压后的扩展目录。
-7. 在扩展卡片中点击“详细信息”→“扩展程序选项”，填入自己的 DeepSeek API Key 并保存。
-8. 打开一个带字幕的 `youtube.com/watch?v=...` 视频，点击 Chrome 工具栏中的“Skimline”图标，浏览器右侧会打开专属 Side Panel。
-
-### 方式 B：从源码运行
+如果你是从 GitHub 下载：
 
 1. 点击 GitHub 页面右上角 `Code` → `Download ZIP`。
 2. 解压 ZIP。
@@ -27,7 +16,19 @@ Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中
 6. 在扩展卡片中点击“详细信息”→“扩展程序选项”，填入自己的 DeepSeek API Key 并保存。
 7. 打开一个带字幕的 `youtube.com/watch?v=...` 视频，点击 Chrome 工具栏中的“Skimline”图标，浏览器右侧会打开专属 Side Panel。
 
+如果你是开发者本地运行：
+
+1. 打开 Chrome，在地址栏输入 `chrome://extensions`。
+2. 打开右上角“开发者模式”。
+3. 点击“加载已解压的扩展程序”，选择本项目目录。
+4. 在扩展卡片中点击“详细信息”→“扩展程序选项”，填入自己的 DeepSeek API Key 并保存。
+5. 打开一个带字幕的 `youtube.com/watch?v=...` 视频，点击 Chrome 工具栏中的“Skimline”图标，浏览器右侧会打开专属 Side Panel。
+
 Side Panel 不会覆盖视频或 YouTube 推荐栏。长视频生成时，观点块即使乱序返回也会始终按时间升序排列；底部用灰色进度和 shimmer 表示后面还有内容。全部观点完成后，整期概览才会淡入顶部，并显示默认折叠的自然分区。
+
+首次生成前会保留 3 秒供用户确认摘要语言，也可以点击“立即生成”。生成中更改语言会终止旧请求并按新语言重新生成；同一视频的不同语言摘要使用独立本地缓存，不会互相覆盖。
+
+摘要任务最多并行运行 2 个，超出的任务会排队。切换视频或收起 Side Panel 不会中断已有任务；回到原视频会恢复已生成的观点与进度。关闭最后一个正在查看该视频的 YouTube 标签页时，对应任务会自动取消。未完成任务会在本机保留断点 24 小时，用于 Chrome 后台被回收后的恢复。
 
 分区使用中性灰底章节栏；单点分区只显示一个时间，多点分区显示时间范围。超长分区标题和观点只在界面上显示省略号，原始内容不会被截断。点击分区标题展开，点击右侧时间跳到该段开头；播放时当前分区和当前观点会同时高亮，只有分区已展开时才自动跟随观点。
 
@@ -64,9 +65,3 @@ git ls-files -z | xargs -0 rg -n "(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|
 ```
 
 第二条命令没有输出时，表示已跟踪文件里没有匹配到常见 API Key / Bearer Token 形态。
-
-## 当前版本
-
-- Version: `0.1.0`
-- Install ZIP: `releases/skimline-0.1.0-extension.zip`
-- SHA-256: `f3daab651731978fab119d835e0e6fda5e7008ca8b320978a508272f17928a73`

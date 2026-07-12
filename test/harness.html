@@ -1,0 +1,260 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <title>Skimline Side Panel UI Harness</title>
+    <link rel="stylesheet" href="../sidepanel.css">
+    <style>
+      body.stream-mode {
+        width: 360px;
+      }
+    </style>
+  </head>
+  <body>
+    <header class="yvpm-appbar">
+      <div class="yvpm-brand" aria-label="Skimline"><span class="yvpm-brand-mark" aria-hidden="true">≋</span><span>Skimline</span></div>
+      <div class="yvpm-language-control">
+        <button id="yvpm-language-button" class="yvpm-language-button" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="yvpm-language-label">简体中文</span><span aria-hidden="true">⌄</span></button>
+        <div id="yvpm-language-menu" class="yvpm-language-menu" role="listbox" aria-label="摘要语言" hidden>
+          <button type="button" role="option" data-language="auto">自动（跟随 Chrome）</button>
+          <button type="button" role="option" data-language="zh-CN">简体中文</button>
+          <button type="button" role="option" data-language="zh-TW">繁體中文</button>
+          <button type="button" role="option" data-language="en">English</button>
+          <button type="button" role="option" data-language="ja">日本語</button>
+          <button type="button" role="option" data-language="ko">한국어</button>
+          <button type="button" role="option" data-language="es">Español</button>
+        </div>
+      </div>
+    </header>
+    <main id="yvpm-panel" aria-label="Skimline 视频提纲">
+      <section id="yvpm-prepare" class="yvpm-prepare" hidden>
+        <div class="yvpm-prepare-card">
+          <span class="yvpm-prepare-label">准备生成摘要</span>
+          <h2>选择这次的摘要语言</h2>
+          <p id="yvpm-prepare-copy">摘要将使用右上角选择的语言呈现。</p>
+          <div class="yvpm-prepare-actions"><span class="yvpm-countdown"><strong id="yvpm-countdown">3</strong> 秒后自动开始</span><button id="yvpm-generate-now" type="button">立即生成</button></div>
+        </div>
+        <p class="yvpm-privacy-note">摘要内容会发送至你配置的模型服务。同一视频的不同语言版本会分别保存在本地。</p>
+      </section>
+      <div id="yvpm-generation-bar" class="yvpm-generation-bar" hidden><span><span class="yvpm-spinner" aria-hidden="true"></span><span id="yvpm-generation-copy">正在生成简体中文摘要…</span></span><button id="yvpm-change-language" type="button">更改语言</button></div>
+      <div id="yvpm-empty" class="yvpm-empty" hidden>
+        打开一个 YouTube 视频即可生成观点地图
+      </div>
+      <section id="yvpm-overview" class="yvpm-overview" hidden>
+        <span class="yvpm-overview-label">概览</span>
+        <p id="yvpm-overview-text"></p>
+      </section>
+      <section id="yvpm-intent" class="yvpm-intent" hidden>
+        <h2>你想从这期视频中获得什么？</h2>
+        <form id="yvpm-intent-form" class="yvpm-intent-form">
+          <input id="yvpm-intent-input" type="text" maxlength="200" autocomplete="off" aria-label="观看需求" placeholder="例如：我是研究生，想了解他的科研成长路径">
+          <button id="yvpm-intent-submit" type="submit">帮我找</button>
+        </form>
+        <div id="yvpm-intent-chips" class="yvpm-intent-chips" aria-label="推荐观看需求"></div>
+        <div id="yvpm-intent-feedback" class="yvpm-intent-feedback" hidden aria-live="polite"></div>
+      </section>
+      <div id="yvpm-matchbar" class="yvpm-matchbar" hidden aria-live="polite">
+        <span id="yvpm-matchbar-text"></span>
+        <div class="yvpm-matchbar-actions">
+          <button id="yvpm-match-clear" class="yvpm-match-clear" type="button">清除</button>
+          <button id="yvpm-match-prev" class="yvpm-match-nav" type="button" aria-label="上一个推荐">↑</button>
+          <button id="yvpm-match-next" class="yvpm-match-nav" type="button" aria-label="下一个推荐">↓</button>
+        </div>
+      </div>
+      <div id="yvpm-list" role="list"></div>
+      <div id="yvpm-progress" class="yvpm-progress" hidden aria-live="polite">
+        <span id="yvpm-progress-text"></span>
+        <span class="yvpm-progress-shimmer" aria-hidden="true"></span>
+      </div>
+      <div id="yvpm-status" hidden></div>
+    </main>
+    <div id="yvpm-toast" class="yvpm-toast" role="status" aria-live="polite" hidden>选择新的摘要语言后会重新生成。</div>
+    <script src="../ui-utils.js"></script>
+    <script>
+      const streamMode = new URLSearchParams(location.search).has("stream");
+      if (streamMode) document.body.classList.add("stream-mode");
+      const runtimeListeners = [];
+      const fixtureSummary = {
+        videoId: "fixture-video",
+        overview: "这期讨论小团队如何避免过早扩张，并用清晰目标把握短暂的转型窗口。",
+        sections: [
+          { title: "团队与目标", startT: 0 },
+          { title: "把握转型", startT: 3600 }
+        ],
+        keyInsights: [
+          {
+            pointT: 10,
+            why: "它挑战了“快速招人等于快速成长”的直觉，提醒早期团队先验证方向，否则人数只会放大混乱。"
+          },
+          {
+            pointT: 3700,
+            why: "它揭示了转型窗口的本质：市场不会等待内部共识，决策链长度本身就是风险。"
+          }
+        ],
+        suggestedIntents: ["验证团队方向", "把握转型窗口", "学习小队协作"],
+        points: [
+          {
+            t: 10,
+            tLabel: "00:10",
+            point: "创业初期不要急着扩张",
+            detail: "团队过早膨胀会拖慢决策。讲者用第一次创业错失转型窗口作为例子。"
+          },
+          {
+            t: 135,
+            tLabel: "02:15",
+            point: "清晰目标比人数更重要",
+            detail: "小团队需要先验证方向，再增加执行人数。人数本身不能解决目标模糊。"
+          },
+          {
+            t: 3700,
+            tLabel: "1:01:40",
+            point: "转型窗口往往很短",
+            detail: "市场变化不会等待内部共识。决策链越长，团队越容易错过窗口。"
+          }
+        ]
+      };
+      const streamingSummary = {
+        videoId: "fixture-video",
+        overview: "这期内容解释主动编码代理如何被触发、受权限约束，并通过验证与恢复机制安全运行。",
+        sections: [
+          {
+            title: "Routines 功能与自动触发机制的完整设计原则",
+            startT: 146
+          },
+          { title: "验证与恢复策略", startT: 1200 }
+        ],
+        keyInsights: [
+          {
+            pointT: 691,
+            why: "它提供了可迁移的代理设计框架：上下文和权限必须一起约束，否则自动化越强风险越大。"
+          },
+          {
+            pointT: 1200,
+            why: "它把长期任务可靠性的关键落到验证与恢复上，而不是单纯追求模型更聪明。"
+          }
+        ],
+        suggestedIntents: ["理解触发机制", "关注权限边界", "学习恢复策略"],
+        points: [
+          {
+            t: 146,
+            tLabel: "02:26",
+            point: "代理满足触发条件后会主动开始工作",
+            detail: "Routines 负责定义触发条件和代理要执行的任务。"
+          },
+          {
+            t: 691,
+            tLabel: "11:31",
+            point: "上下文和权限共同限制代理行为",
+            detail: "代理只应读取必要上下文，并遵守预先定义的权限边界。"
+          },
+          {
+            t: 1200,
+            tLabel: "20:00",
+            point: "验证与恢复机制让长期任务更可靠",
+            detail: "每次执行后都要验证结果，失败时按明确策略恢复。"
+          }
+        ]
+      };
+      function emitRuntimeMessage(message) {
+        for (const listener of runtimeListeners) {
+          listener(message, { tab: { id: 1 } });
+        }
+      }
+      globalThis.chrome = {
+        storage: {
+          local: {
+            async get(key) {
+              return { [key]: key === "summary_language" ? "zh-CN" : undefined };
+            },
+            async set() {}
+          }
+        },
+        runtime: {
+          lastError: null,
+          onMessage: {
+            addListener(listener) {
+              runtimeListeners.push(listener);
+            }
+          },
+          openOptionsPage() {},
+          sendMessage(message, callback) {
+            if (message.type === "GET_CACHED_SUMMARY") {
+              callback({
+                ok: true,
+                summary: streamMode ? null : fixtureSummary
+              });
+            } else if (message.type === "GENERATE_SUMMARY" && streamMode) {
+              setTimeout(() => {
+                emitRuntimeMessage({
+                  type: "SUMMARY_CHUNK",
+                  videoId: "fixture-video",
+                  generationId: message.payload.generationId,
+                  targetLanguage: message.payload.targetLanguage,
+                  index: 1,
+                  total: 2,
+                  points: [streamingSummary.points[2]]
+                });
+              }, 700);
+              setTimeout(() => {
+                emitRuntimeMessage({
+                  type: "SUMMARY_CHUNK",
+                  videoId: "fixture-video",
+                  generationId: message.payload.generationId,
+                  targetLanguage: message.payload.targetLanguage,
+                  index: 0,
+                  total: 2,
+                  points: streamingSummary.points.slice(0, 2)
+                });
+              }, 1800);
+              setTimeout(() => {
+                emitRuntimeMessage({
+                  type: "SUMMARY_STRUCTURE_STARTED",
+                  videoId: "fixture-video",
+                  generationId: message.payload.generationId,
+                  targetLanguage: message.payload.targetLanguage,
+                  pointCount: 3
+                });
+              }, 2900);
+              setTimeout(() => {
+                callback({ ok: true, summary: streamingSummary });
+              }, 4000);
+            } else if (message.type === "MATCH_SUMMARY_INTENT") {
+              callback({ ok: true, pointTs: [10, 3700], cached: false });
+            } else {
+              callback({ ok: true, configured: true });
+            }
+          }
+        },
+        tabs: {
+          async query() {
+            return [{ id: 1 }];
+          },
+          sendMessage(_tabId, message, callback) {
+            if (message.type === "GET_VIDEO_STATE") {
+              callback({
+                ok: true,
+                videoId: "fixture-video",
+                currentTime: 20
+              });
+            } else if (message.type === "GET_CAPTION_SEGMENTS") {
+              callback({
+                ok: true,
+                videoId: "fixture-video",
+                supported: true,
+                duration: 2400,
+                sourceLang: "en",
+                segments: [{ tMs: 0, text: "fixture" }]
+              });
+            } else {
+              document.body.dataset.seek = String(message.t);
+              callback({ ok: true });
+            }
+          },
+          onActivated: { addListener() {} },
+          onUpdated: { addListener() {} }
+        }
+      };
+    </script>
+    <script src="../sidepanel.js"></script>
+  </body>
+</html>
