@@ -4,6 +4,6 @@
   "private": true,
   "description": "Skimline — a scannable, jump-anywhere map for long YouTube videos",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   }
 }

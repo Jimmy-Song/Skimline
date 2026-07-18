@@ -91,7 +91,10 @@
             why: "它揭示了转型窗口的本质：市场不会等待内部共识，决策链长度本身就是风险。"
           }
         ],
-        suggestedIntents: ["验证团队方向", "把握转型窗口", "学习小队协作"],
+        defaultRecommendations: [
+          { label: "创业初期为什么别急着扩张？", pointTs: [10, 135] },
+          { label: "转型窗口为什么容易错过？", pointTs: [3700] }
+        ],
         points: [
           {
             t: 10,
@@ -133,7 +136,11 @@
             why: "它把长期任务可靠性的关键落到验证与恢复上，而不是单纯追求模型更聪明。"
           }
         ],
-        suggestedIntents: ["理解触发机制", "关注权限边界", "学习恢复策略"],
+        defaultRecommendations: [
+          { label: "代理为什么能主动开始工作？", pointTs: [146] },
+          { label: "权限边界为什么决定代理风险？", pointTs: [691] },
+          { label: "长期任务为什么依赖恢复机制？", pointTs: [1200] }
+        ],
         points: [
           {
             t: 146,
@@ -218,6 +225,14 @@
               setTimeout(() => {
                 callback({ ok: true, summary: streamingSummary });
               }, 4000);
+            } else if (message.type === "GET_DEFAULT_RECOMMENDATIONS") {
+              callback({
+                ok: true,
+                recommendations: streamMode
+                  ? streamingSummary.defaultRecommendations
+                  : fixtureSummary.defaultRecommendations,
+                cached: false
+              });
             } else if (message.type === "MATCH_SUMMARY_INTENT") {
               callback({ ok: true, pointTs: [10, 3700], cached: false });
             } else {

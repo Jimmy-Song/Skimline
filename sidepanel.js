@@ -3,7 +3,7 @@
 
   const DEFAULT_SECTIONS_COLLAPSED = true;
   const LANGUAGE_SETTING_KEY = "summary_language";
-  const PREPARE_COUNTDOWN_SECONDS = 3;
+  const PREPARE_COUNTDOWN_SECONDS = 6;
   const LANGUAGE_OPTIONS = {
     auto: "自动（跟随 Chrome）",
     "zh-CN": "简体中文",
@@ -31,8 +31,12 @@
     languageSetting: "auto",
     targetLanguage: "zh-CN",
     activeGenerationId: "",
+    activeOverviewGenerationId: "",
     pendingCaptions: null,
+    overviewCaptions: null,
+    overviewRetrying: false,
     countdownTimer: null,
+    countdownRemaining: 0,
     toastTimer: null,
     points: [],
     pointIds: new Set(),
@@ -48,9 +52,12 @@
     expandedRow: null,
     recommendationRequestId: 0,
     recommendationIntent: "",
+    recommendationSource: "",
     recommendationRows: [],
     recommendationIndex: -1,
     recommendationPreviousExpanded: null,
+    defaultRecommendationRequestId: 0,
+    defaultRecommendations: [],
   };
 
   const elements = {
@@ -60,6 +67,7 @@
     overview: document.querySelector("#yvpm-overview"),
     overviewLabel: document.querySelector(".yvpm-overview-label"),
     overviewText: document.querySelector("#yvpm-overview-text"),
+    overviewRetry: document.querySelector("#yvpm-overview-retry"),
     intent: document.querySelector("#yvpm-intent"),
     intentForm: document.querySelector("#yvpm-intent-form"),
     intentInput: document.querySelector("#yvpm-intent-input"),
@@ -99,6 +107,15 @@
         else resolve(response);
       });
     });
+  }
+
+  function matchesGeneration(message, generationId) {
+    return Boolean(
+      generationId &&
+        (message?.generationId === generationId ||
+          (Array.isArray(message?.generationIds) &&
+            message.generationIds.includes(generationId))),
+    );
   }
 
   function tabMessage(message) {
@@ -164,6 +181,10 @@
   function toggleLanguageMenu(open = elements.languageMenu.hidden) {
     elements.languageMenu.hidden = !open;
     elements.languageButton.setAttribute("aria-expanded", String(open));
+    if (state.preparing) {
+      if (open) stopPrepareCountdown();
+      else startPrepareCountdown();
+    }
     if (open) {
       const selected = elements.languageMenu.querySelector(
         '[aria-selected="true"]',
@@ -186,10 +207,34 @@
     state.countdownTimer = null;
   }
 
+  function startPrepareCountdown() {
+    if (
+      !state.preparing ||
+      !state.pendingCaptions ||
+      state.countdownTimer ||
+      !elements.languageMenu.hidden
+    ) {
+      return;
+    }
+    elements.countdown.textContent = String(state.countdownRemaining);
+    state.countdownTimer = setInterval(() => {
+      state.countdownRemaining -= 1;
+      elements.countdown.textContent = String(
+        Math.max(0, state.countdownRemaining),
+      );
+      if (state.countdownRemaining <= 0) {
+        const captions = state.pendingCaptions;
+        stopPrepareCountdown();
+        generateFromCaptions(captions);
+      }
+    }, 1000);
+  }
+
   function hidePrepare() {
     stopPrepareCountdown();
     state.preparing = false;
     state.pendingCaptions = null;
+    state.countdownRemaining = 0;
     elements.prepare.hidden = true;
   }
 
@@ -226,20 +271,14 @@
     setGeneratingVisible(false);
     state.preparing = true;
     state.pendingCaptions = captions;
+    state.overviewCaptions = captions;
     elements.prepareCopy.textContent =
       `视频字幕语言为${sourceLanguageDisplayName(captions.sourceLang)}，摘要将使用右上角选择的语言呈现。`;
     elements.prepare.hidden = false;
     stopPrepareCountdown();
-    let seconds = PREPARE_COUNTDOWN_SECONDS;
-    elements.countdown.textContent = String(seconds);
-    state.countdownTimer = setInterval(() => {
-      seconds -= 1;
-      elements.countdown.textContent = String(Math.max(0, seconds));
-      if (seconds <= 0) {
-        stopPrepareCountdown();
-        generateFromCaptions(captions);
-      }
-    }, 1000);
+    state.countdownRemaining = PREPARE_COUNTDOWN_SECONDS;
+    elements.countdown.textContent = String(state.countdownRemaining);
+    startPrepareCountdown();
   }
 
   function generationId() {
@@ -349,11 +388,13 @@
     }
     if (restoreSections) restoreRecommendationSections();
     state.recommendationIntent = "";
+    state.recommendationSource = "";
     state.recommendationRows = [];
     state.recommendationIndex = -1;
     state.recommendationPreviousExpanded = null;
     elements.matchbar.hidden = true;
     elements.panel?.classList.remove("yvpm-has-matches");
+    elements.intentChips.classList.remove("yvpm-intent-chips-muted");
     setActiveIntentChip("");
     if (clearInput) elements.intentInput.value = "";
   }
@@ -396,13 +437,15 @@
     elements.panel?.classList.add("yvpm-has-matches");
   }
 
-  function applyRecommendation(intent, pointTs) {
-    state.recommendationIntent = intent;
-    state.recommendationRows = (Array.isArray(pointTs) ? pointTs : [])
+  function applyRecommendation(intent, pointTs, { source = "custom" } = {}) {
+    const recommendationRows = (Array.isArray(pointTs) ? pointTs : [])
       .map(getPointRow)
       .filter(Boolean)
       .slice(0, 4);
-    if (!state.recommendationRows.length) return false;
+    if (!recommendationRows.length) return false;
+    state.recommendationIntent = intent;
+    state.recommendationSource = source;
+    state.recommendationRows = recommendationRows;
 
     const matchedSections = new Set(
       state.recommendationRows
@@ -415,10 +458,34 @@
     for (const row of state.recommendationRows) {
       row.classList.add("yvpm-recommended");
     }
+    elements.intentChips.classList.toggle(
+      "yvpm-intent-chips-muted",
+      source === "custom",
+    );
     setActiveIntentChip(intent);
     renderMatchbar(intent, state.recommendationRows.length);
     focusRecommendation(0);
     return true;
+  }
+
+  function runDefaultRecommendation(question) {
+    const intent = String(question?.label || "").trim();
+    if (!intent || !Array.isArray(question?.pointTs)) return;
+    if (!state.loaded || !state.videoId) {
+      setIntentFeedback("摘要完成后即可查看推荐片段。", "error");
+      return;
+    }
+
+    clearRecommendation({ restoreSections: true });
+    state.recommendationPreviousExpanded = state.sectionViews.map(
+      (view) => !view.body.hidden,
+    );
+    setIntentFeedback("");
+    if (!applyRecommendation(intent, question.pointTs, { source: "default" })) {
+      restoreRecommendationSections();
+      state.recommendationPreviousExpanded = null;
+      setActiveIntentChip("");
+    }
   }
 
   async function runRecommendation(rawIntent) {
@@ -460,7 +527,7 @@
       }
       if (!response?.ok) throw new Error(response?.error || "匹配失败，请重试");
       setIntentFeedback("");
-      if (!applyRecommendation(intent, response.pointTs)) {
+      if (!applyRecommendation(intent, response.pointTs, { source: "custom" })) {
         restoreRecommendationSections();
         state.recommendationPreviousExpanded = null;
         setActiveIntentChip("");
@@ -491,30 +558,134 @@
     }
   }
 
-  function renderIntentControls(summary) {
+  function showDefaultRecommendationLoading() {
     elements.intentChips.replaceChildren();
-    const intents = Array.isArray(summary?.suggestedIntents)
-      ? summary.suggestedIntents.slice(0, 3)
+    const placeholder = document.createElement("span");
+    placeholder.className = "yvpm-intent-chip-placeholder";
+    placeholder.textContent = "正在发现值得看的片段…";
+    elements.intentChips.append(placeholder);
+  }
+
+  function renderDefaultRecommendationChips(recommendations) {
+    elements.intentChips.replaceChildren();
+    state.defaultRecommendations = Array.isArray(recommendations)
+      ? recommendations.slice(0, 4)
       : [];
-    for (const intent of intents) {
+    for (const question of state.defaultRecommendations) {
+      const intent = String(question?.label || "").trim();
+      const pointTs = Array.isArray(question?.pointTs)
+        ? question.pointTs.slice(0, 4)
+        : [];
+      if (!intent || !pointTs.length) continue;
       const chip = document.createElement("button");
       chip.type = "button";
       chip.className = "yvpm-intent-chip";
       chip.dataset.intent = intent;
+      chip.dataset.source = "default";
       chip.textContent = intent;
-      chip.addEventListener("click", () => runRecommendation(intent));
+      chip.addEventListener("click", () =>
+        runDefaultRecommendation({ label: intent, pointTs }),
+      );
       elements.intentChips.append(chip);
     }
+    elements.intentChips.classList.toggle(
+      "yvpm-intent-chips-muted",
+      state.recommendationSource === "custom",
+    );
+    setActiveIntentChip(state.recommendationIntent);
+  }
+
+  async function loadDefaultRecommendations(summary) {
+    const points = YouTubeSummary.dedupePointsByTimestamp(summary?.points);
+    if (!state.videoId || !points.length) {
+      renderDefaultRecommendationChips([]);
+      return;
+    }
+    const requestId = ++state.defaultRecommendationRequestId;
+    const videoId = state.videoId;
+    const targetLanguage = state.targetLanguage;
+    showDefaultRecommendationLoading();
+    try {
+      const response = await runtimeMessage({
+        type: "GET_DEFAULT_RECOMMENDATIONS",
+        payload: {
+          videoId,
+          targetLanguage,
+        },
+      });
+      if (
+        requestId !== state.defaultRecommendationRequestId ||
+        videoId !== state.videoId ||
+        targetLanguage !== state.targetLanguage
+      ) {
+        return;
+      }
+      renderDefaultRecommendationChips(
+        response?.ok ? response.recommendations : [],
+      );
+    } catch {
+      if (
+        requestId === state.defaultRecommendationRequestId &&
+        videoId === state.videoId &&
+        targetLanguage === state.targetLanguage
+      ) {
+        renderDefaultRecommendationChips([]);
+      }
+    }
+  }
+
+  function renderIntentControls(summary) {
     setIntentBusy(false);
     setIntentFeedback("");
     elements.intent.hidden = false;
+    loadDefaultRecommendations(summary);
   }
 
   function showOverviewPlaceholder() {
     elements.overview.className = "yvpm-overview yvpm-overview-pending";
-    elements.overviewLabel.textContent = "概览生成中…";
-    elements.overviewText.textContent = "";
+    elements.overviewLabel.textContent = "概览";
+    elements.overviewText.textContent = "正在梳理整期视频…";
+    elements.overviewRetry.hidden = true;
     elements.overview.hidden = false;
+  }
+
+  function renderOverview(overview, { animate = true } = {}) {
+    const content = String(overview || "").trim();
+    if (!content) return false;
+    elements.overview.className = `yvpm-overview${
+      animate ? " yvpm-overview-arrive" : ""
+    }`;
+    elements.overviewLabel.textContent = "概览";
+    elements.overviewText.textContent = content;
+    elements.overviewRetry.hidden = true;
+    elements.overview.hidden = false;
+    return true;
+  }
+
+  function showOverviewError(message = "概览生成失败") {
+    elements.overview.className = "yvpm-overview yvpm-overview-error";
+    elements.overviewLabel.textContent = "概览";
+    elements.overviewText.textContent = message;
+    elements.overviewRetry.hidden = false;
+    elements.overview.hidden = false;
+  }
+
+  function clearOverview() {
+    state.activeOverviewGenerationId = "";
+    elements.overview.className = "yvpm-overview";
+    elements.overviewLabel.textContent = "概览";
+    elements.overview.hidden = true;
+    elements.overviewText.textContent = "";
+    elements.overviewRetry.hidden = true;
+  }
+
+  function hasResolvedOverview() {
+    return Boolean(
+      !elements.overview.hidden &&
+        !elements.overview.classList.contains("yvpm-overview-pending") &&
+        !elements.overview.classList.contains("yvpm-overview-error") &&
+        elements.overviewText.textContent.trim(),
+    );
   }
 
   function collapseExpandedRow(except = null) {
@@ -779,23 +950,22 @@
   }
 
   function renderSummary(summary) {
-    clearPoints();
+    clearPoints({ preserveOverview: true });
     const points = YouTubeSummary.dedupePointsByTimestamp(summary?.points);
     const groups = YouTubeSummary.groupPointsBySections(
       points,
       summary?.sections,
     );
     const insightMap = insightMapFromSummary(summary);
-    if (!summary?.overview || !groups.length) {
+    if (summary?.overview && !hasResolvedOverview()) {
+      renderOverview(summary.overview, { animate: false });
+    }
+    if (!groups.length) {
       mergePoints(points, false, insightMap);
       renderIntentControls(summary);
+      if (elements.overview.hidden) showOverviewError();
       return;
     }
-
-    elements.overviewText.textContent = summary.overview;
-    elements.overviewLabel.textContent = "概览";
-    elements.overview.className = "yvpm-overview yvpm-overview-arrive";
-    elements.overview.hidden = false;
     state.sectionGroups = groups;
     state.points = groups.flatMap((group) => group.points);
     for (const point of state.points) {
@@ -809,11 +979,14 @@
     }
     elements.list.append(fragment);
     renderIntentControls(summary);
+    if (elements.overview.hidden) showOverviewError();
     updateNowPlaying({ follow: false });
   }
 
-  function clearPoints() {
+  function clearPoints({ preserveOverview = false } = {}) {
     clearRecommendation({ restoreSections: false, clearInput: true });
+    state.defaultRecommendationRequestId += 1;
+    state.defaultRecommendations = [];
     state.points = [];
     state.pointIds.clear();
     state.pointRows.clear();
@@ -824,12 +997,10 @@
     state.sectionGroups = [];
     state.sectionViews = [];
     state.expandedRow = null;
-    elements.overview.className = "yvpm-overview";
-    elements.overviewLabel.textContent = "概览";
-    elements.overview.hidden = true;
-    elements.overviewText.textContent = "";
+    if (!preserveOverview) clearOverview();
     elements.intent.hidden = true;
     elements.intentChips.replaceChildren();
+    elements.intentChips.classList.remove("yvpm-intent-chips-muted");
     setIntentFeedback("");
     setIntentBusy(false);
     elements.list.replaceChildren();
@@ -860,6 +1031,9 @@
     state.loading = false;
     state.preparing = false;
     state.activeGenerationId = "";
+    state.activeOverviewGenerationId = "";
+    state.overviewCaptions = null;
+    state.overviewRetrying = false;
     state.currentTime = Number(currentTime) || 0;
     hidePrepare();
     setGeneratingVisible(false);
@@ -887,12 +1061,71 @@
     });
   }
 
+  async function retryOverview() {
+    if (state.overviewRetrying || !state.videoId || !state.tabId) return;
+    const videoId = state.videoId;
+    const epoch = state.epoch;
+    const targetLanguage = state.targetLanguage;
+    const requestGenerationId = state.activeGenerationId || generationId();
+    const isCurrent = () =>
+      state.videoId === videoId &&
+      state.epoch === epoch &&
+      state.targetLanguage === targetLanguage &&
+      state.activeOverviewGenerationId === requestGenerationId;
+    state.overviewRetrying = true;
+    state.activeOverviewGenerationId = requestGenerationId;
+    showOverviewPlaceholder();
+    try {
+      let captions = state.overviewCaptions;
+      if (!captions || captions.videoId !== videoId) {
+        captions = await tabMessage({ type: "GET_CAPTION_SEGMENTS", videoId });
+      }
+      if (!isCurrent()) return;
+      if (!captions?.ok || captions.videoId !== videoId || !captions.supported) {
+        throw new Error(captions?.error || "读取字幕失败");
+      }
+      state.overviewCaptions = captions;
+      const response = await runtimeMessage({
+        type: "GENERATE_OVERVIEW",
+        payload: {
+          videoId,
+          generationId: requestGenerationId,
+          sourceTabId: state.tabId,
+          targetLanguage,
+          segments: captions.segments,
+        },
+      });
+      if (!isCurrent()) return;
+      if (!response?.ok) {
+        throw new Error(response?.error || "概览生成失败，请重试");
+      }
+      renderOverview(response.overview);
+    } catch (error) {
+      if (isCurrent()) {
+        showOverviewError(error?.message || "概览生成失败，请重试");
+      }
+    } finally {
+      if (isCurrent()) state.overviewRetrying = false;
+    }
+  }
+
   function restoreTaskSnapshot(task) {
     hidePrepare();
-    clearPoints();
+    clearPoints({ preserveOverview: true });
     state.activeGenerationId = task.generationId;
+    state.activeOverviewGenerationId = task.generationId;
     state.loading = true;
-    showOverviewPlaceholder();
+    if (
+      task.overviewStatus === "complete" &&
+      task.overview &&
+      !hasResolvedOverview()
+    ) {
+      renderOverview(task.overview, { animate: false });
+    } else if (task.overviewStatus === "failed" && !hasResolvedOverview()) {
+      showOverviewError(task.overviewError || "概览生成失败");
+    } else if (elements.overview.hidden) {
+      showOverviewPlaceholder();
+    }
     setStatus("");
     setGeneratingVisible(true);
     if (task.status === "queued") {
@@ -908,6 +1141,7 @@
     const videoId = state.videoId;
     const epoch = state.epoch;
     const targetLanguage = state.targetLanguage;
+    state.overviewCaptions = captions;
     const isCurrent = () =>
       state.videoId === videoId &&
       state.epoch === epoch &&
@@ -940,11 +1174,11 @@
   }
 
   async function generateFromCaptions(captions) {
+    if (!captions || (state.loading && state.activeGenerationId)) return;
     const videoId = state.videoId;
     const epoch = state.epoch;
     const targetLanguage = state.targetLanguage;
     const requestGenerationId = generationId();
-    state.activeGenerationId = requestGenerationId;
     const isCurrent = () =>
       state.videoId === videoId &&
       state.epoch === epoch &&
@@ -952,6 +1186,9 @@
       state.activeGenerationId === requestGenerationId;
     hidePrepare();
     clearPoints();
+    state.activeGenerationId = requestGenerationId;
+    state.activeOverviewGenerationId = requestGenerationId;
+    state.overviewCaptions = captions;
     state.loading = true;
     showOverviewPlaceholder();
     setStatus("");
@@ -1002,13 +1239,23 @@
     state.loading = true;
     setStatus("正在准备摘要…");
     try {
-      const cached = await runtimeMessage({
-        type: "GET_CACHED_SUMMARY",
-        videoId,
-        targetLanguage,
-      });
+      const [cached, cachedOverview] = await Promise.all([
+        runtimeMessage({
+          type: "GET_CACHED_SUMMARY",
+          videoId,
+          targetLanguage,
+        }),
+        runtimeMessage({
+          type: "GET_CACHED_OVERVIEW",
+          videoId,
+          targetLanguage,
+        }),
+      ]);
       if (!isCurrent()) return;
       if (!cached?.ok) throw new Error(cached?.error || "读取缓存失败");
+      if (cachedOverview?.ok && cachedOverview.overview?.overview) {
+        renderOverview(cachedOverview.overview.overview, { animate: false });
+      }
       if (cached.summary) {
         renderSummary(cached.summary);
         state.loaded = true;
@@ -1089,6 +1336,9 @@
     state.loading = false;
     state.preparing = false;
     state.activeGenerationId = "";
+    state.activeOverviewGenerationId = "";
+    state.overviewCaptions = null;
+    state.overviewRetrying = false;
     hidePrepare();
     setGeneratingVisible(false);
     clearPoints();
@@ -1119,7 +1369,7 @@
     if (
       message?.type === "SUMMARY_CHUNK" &&
       message.videoId === state.videoId &&
-      message.generationId === state.activeGenerationId &&
+      matchesGeneration(message, state.activeGenerationId) &&
       message.targetLanguage === state.targetLanguage
     ) {
       mergePoints(message.points, true);
@@ -1130,17 +1380,45 @@
     if (
       message?.type === "SUMMARY_STRUCTURE_STARTED" &&
       message.videoId === state.videoId &&
-      message.generationId === state.activeGenerationId &&
+      matchesGeneration(message, state.activeGenerationId) &&
       message.targetLanguage === state.targetLanguage
     ) {
       hideProgress();
+      return;
+    }
+    if (
+      message?.type === "OVERVIEW_STARTED" &&
+      message.videoId === state.videoId &&
+      matchesGeneration(message, state.activeOverviewGenerationId) &&
+      message.targetLanguage === state.targetLanguage
+    ) {
       showOverviewPlaceholder();
+      return;
+    }
+    if (
+      message?.type === "OVERVIEW_COMPLETE" &&
+      message.videoId === state.videoId &&
+      matchesGeneration(message, state.activeOverviewGenerationId) &&
+      message.targetLanguage === state.targetLanguage
+    ) {
+      state.overviewRetrying = false;
+      renderOverview(message.overview);
+      return;
+    }
+    if (
+      message?.type === "OVERVIEW_FAILED" &&
+      message.videoId === state.videoId &&
+      matchesGeneration(message, state.activeOverviewGenerationId) &&
+      message.targetLanguage === state.targetLanguage
+    ) {
+      state.overviewRetrying = false;
+      showOverviewError(message.error || "概览生成失败，请重试");
       return;
     }
     if (
       message?.type === "SUMMARY_QUEUED" &&
       message.videoId === state.videoId &&
-      message.generationId === state.activeGenerationId &&
+      matchesGeneration(message, state.activeGenerationId) &&
       message.targetLanguage === state.targetLanguage
     ) {
       elements.generationCopy.textContent = "正在排队等待生成…";
@@ -1149,7 +1427,7 @@
     if (
       message?.type === "SUMMARY_STARTED" &&
       message.videoId === state.videoId &&
-      message.generationId === state.activeGenerationId &&
+      matchesGeneration(message, state.activeGenerationId) &&
       message.targetLanguage === state.targetLanguage
     ) {
       elements.generationCopy.textContent =
@@ -1159,7 +1437,7 @@
     if (
       message?.type === "SUMMARY_COMPLETE" &&
       message.videoId === state.videoId &&
-      message.generationId === state.activeGenerationId &&
+      matchesGeneration(message, state.activeGenerationId) &&
       message.targetLanguage === state.targetLanguage
     ) {
       renderSummary(message.summary);
@@ -1173,7 +1451,7 @@
     if (
       message?.type === "SUMMARY_FAILED" &&
       message.videoId === state.videoId &&
-      message.generationId === state.activeGenerationId &&
+      matchesGeneration(message, state.activeGenerationId) &&
       message.targetLanguage === state.targetLanguage
     ) {
       state.loading = false;
@@ -1219,7 +1497,7 @@
     runRecommendation(elements.intentInput.value);
   });
   elements.matchClear.addEventListener("click", () => {
-    clearRecommendation({ restoreSections: true });
+    clearRecommendation({ restoreSections: true, clearInput: true });
     setIntentFeedback("");
   });
   elements.matchPrev.addEventListener("click", () => {
@@ -1241,15 +1519,18 @@
   elements.generateNow.addEventListener("click", () => {
     if (state.pendingCaptions) generateFromCaptions(state.pendingCaptions);
   });
+  elements.overviewRetry.addEventListener("click", retryOverview);
   for (const option of elements.languageOptions) {
     option.addEventListener("click", async () => {
       const nextSetting = option.dataset.language;
       const unchanged = nextSetting === state.languageSetting;
+      const wasPreparing = state.preparing;
+      const pendingCaptions = state.pendingCaptions;
+      const previousTargetLanguage = state.targetLanguage;
       toggleLanguageMenu(false);
+      if (wasPreparing) stopPrepareCountdown();
       if (unchanged) {
-        if (state.preparing && state.pendingCaptions) {
-          generateFromCaptions(state.pendingCaptions);
-        }
+        startPrepareCountdown();
         return;
       }
       state.languageSetting = nextSetting;
@@ -1258,10 +1539,14 @@
         [LANGUAGE_SETTING_KEY]: state.languageSetting,
       });
       if (!state.videoId) return;
+      if (wasPreparing && pendingCaptions) {
+        showPrepare(pendingCaptions);
+        return;
+      }
       await runtimeMessage({
         type: "CANCEL_GENERATION",
         videoId: state.videoId,
-        targetLanguage: state.targetLanguage,
+        targetLanguage: previousTargetLanguage,
         tabId: state.tabId,
       }).catch(() => null);
       state.epoch += 1;

@@ -1,9 +1,11 @@
 (function initGenerationUtils(root) {
   "use strict";
 
-  const SUMMARY_PROMPT_VERSION = 8;
+  const SUMMARY_PROMPT_VERSION = 9;
   const SUMMARY_SCHEMA_VERSION = 6;
+  const OVERVIEW_PROMPT_VERSION = 1;
   const INTENT_MATCH_PROMPT_VERSION = 1;
+  const DEFAULT_RECOMMENDATION_PROMPT_VERSION = 1;
   const DEFAULT_SUMMARY_LANGUAGE = "zh-CN";
   const SUMMARY_LANGUAGES = Object.freeze({
     "zh-CN": "简体中文",
@@ -34,13 +36,19 @@
 
 无论字幕是什么语言，point 和 detail 都用简体中文。
 只输出一个 JSON 数组，形如 [{"t":870,"point":"…","detail":"…"}]，不要任何多余文字或代码块标记。`;
-  const STRUCTURE_SYSTEM_PROMPT = `你会收到一个视频按时间排序的观点列表（每条：时间秒 + 一句话观点）。请做四件事：
+  const OVERVIEW_SYSTEM_PROMPT = `你会收到一段带时间戳的完整视频字幕。
 
-1. overview：写 2–3 句简体中文，概括这期视频到底讲了什么、按什么脉络展开（如问题→方案、总—分等），让人不看下面的列表也能明白视频主旨。
+请写 2–3 句简体中文，概括这期视频到底讲了什么、按什么脉络展开（如问题→方案、总—分等），让人不看观点列表也能明白视频主旨。
 
-2. sections：把这些观点按视频的自然结构分成若干段（通常 3–6 段），每段一个标题。标题 6–14 字，完整短语，不要以连词或助词结尾（如“问题 · 主动代理的挑战”“三个设计目标”）。分段必须按时间顺序、不重叠、覆盖全部观点。
+要求：
+- 忠实覆盖整期视频，不加入字幕里没有的内容；
+- 延续自然、清楚、克制的表达，不写标题、列表、观看建议或价值评分；
+- 只输出 JSON：{"overview":"…"}，不要任何多余文字或代码块标记。`;
+  const STRUCTURE_SYSTEM_PROMPT = `你会收到一个视频按时间排序的观点列表（每条：时间秒 + 一句话观点）。请做两件事：
 
-3. keyInsights：从全部观点中识别出 2-3 个“核心洞见”——那些最具穿透力、最反直觉、最有方法论价值、或最能改变认知的观点。标准：
+1. sections：把这些观点按视频的自然结构分成若干段（通常 3–6 段），每段一个标题。标题 6–14 字，完整短语，不要以连词或助词结尾（如“问题 · 主动代理的挑战”“三个设计目标”）。分段必须按时间顺序、不重叠、覆盖全部观点。
+
+2. keyInsights：从全部观点中识别出 2-3 个“核心洞见”——那些最具穿透力、最反直觉、最有方法论价值、或最能改变认知的观点。标准：
    - 它挑战了某个常识或直觉
    - 它提供了可迁移的思维框架或决策方法
    - 它揭示了问题的本质或深层原因
@@ -50,20 +58,35 @@
    - pointT: 该洞见对应观点的时间戳（秒，整数）
    - why: 用 1-2 句话（50-80字）说明为什么这个观点重要。可以从这些角度：它挑战了什么常识？它解决了什么难题？它提供了什么可迁移的方法论？语气要直接、有力，像在跟朋友解释“你一定要记住这个”。
 
-4. suggestedIntents：根据这期视频的具体内容，生成 3 个用户最可能关心的观看目的。要求：
-   - 每个标签 4–8 个汉字，使用动作导向的短语，如“了解科研路径”“学习研究方法”
-   - 三个标签代表不同观看目的，不能只是换一种说法
-   - 必须贴合本视频，不能使用对所有视频都一样的空泛标签
-
 只输出 JSON：
 {
-  "overview": "…",
   "sections": [{"title": "…", "startT": <秒数>}, …],
-  "keyInsights": [{"pointT": <秒数>, "why": "…"}, …],
-  "suggestedIntents": ["…", "…", "…"]
+  "keyInsights": [{"pointT": <秒数>, "why": "…"}, …]
 }
 
 keyInsights 可以为空数组（如果没有特别突出的洞见）。不要输出任何多余文字或代码块标记。`;
+  const DEFAULT_RECOMMENDATION_SYSTEM_PROMPT = `你是视频观看导航助手。用户会给你当前视频的完整观点列表。每条观点都包含唯一时间戳、观点和详细说明。
+
+任务：生成最多 4 个“值得看问题”，帮助用户快速判断这条长视频里哪些片段值得自己看。
+
+规则：
+- 必须综合 point 和 detail 判断观看价值，不能只看章节名或关键词
+- 每个问题都必须有清晰的视频内容支撑，并绑定 1-4 个真实存在的观点时间戳
+- 问题要具体、有信息指向，优先选择有新意、反直觉、实用价值或高信息密度的片段
+- 使用自然的简体中文问题句，例如“机器人当前真正卡在哪里？”“她从竞赛走向机器人研究的关键转折是什么？”
+- 不要输出宽泛分类、用户身份标签或通用目的，例如“了解行业趋势”“学习方法论”“只看核心观点”
+- 各问题之间不能只是换一种说法；如果没有足够好的问题，可以少于 4 个，甚至返回空数组
+- pointTs 只能从输入列表中选择，并按视频时间升序排列
+- 不要解释推荐原因
+
+只输出 JSON：
+{
+  "recommendations": [
+    {"label": "…？", "pointTs": [<秒数>, …]}
+  ]
+}
+
+不要输出任何多余文字或代码块标记。`;
   const INTENT_MATCH_SYSTEM_PROMPT = `你是视频观看导航助手。用户会给出自己的观看目的，以及当前视频的完整观点列表。每条观点都包含唯一时间戳、观点和详细说明。
 
 任务：找出真正符合用户目的、最值得用户观看的观点。
@@ -113,6 +136,15 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
       : `summary:${videoId}:${normalized}`;
   }
 
+  function overviewCacheKey(
+    videoId,
+    language = DEFAULT_SUMMARY_LANGUAGE,
+    promptVersion = OVERVIEW_PROMPT_VERSION,
+  ) {
+    const normalized = normalizeSummaryLanguage(language);
+    return `overview:${videoId}:${normalized}:v${promptVersion}`;
+  }
+
   function recommendationCacheKey(
     videoId,
     language = DEFAULT_SUMMARY_LANGUAGE,
@@ -121,6 +153,15 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     return normalized === DEFAULT_SUMMARY_LANGUAGE
       ? `recommendations:${videoId}`
       : `recommendations:${videoId}:${normalized}`;
+  }
+
+  function defaultRecommendationCacheKey(
+    videoId,
+    language = DEFAULT_SUMMARY_LANGUAGE,
+    promptVersion = DEFAULT_RECOMMENDATION_PROMPT_VERSION,
+  ) {
+    const normalized = normalizeSummaryLanguage(language);
+    return `default-recommendations:${videoId}:${normalized}:v${promptVersion}`;
   }
 
   function systemPromptForLanguage(language) {
@@ -138,6 +179,24 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     return label === SUMMARY_LANGUAGES[DEFAULT_SUMMARY_LANGUAGE]
       ? STRUCTURE_SYSTEM_PROMPT
       : STRUCTURE_SYSTEM_PROMPT.replaceAll("简体中文", label);
+  }
+
+  function overviewPromptForLanguage(language) {
+    const label = summaryLanguageLabel(language);
+    return label === SUMMARY_LANGUAGES[DEFAULT_SUMMARY_LANGUAGE]
+      ? OVERVIEW_SYSTEM_PROMPT
+      : OVERVIEW_SYSTEM_PROMPT.replaceAll("简体中文", label);
+  }
+
+  function defaultRecommendationPromptForLanguage(language) {
+    const label = summaryLanguageLabel(language);
+    if (label === SUMMARY_LANGUAGES[DEFAULT_SUMMARY_LANGUAGE]) {
+      return DEFAULT_RECOMMENDATION_SYSTEM_PROMPT;
+    }
+    return DEFAULT_RECOMMENDATION_SYSTEM_PROMPT.replace(
+      "- 使用自然的简体中文问题句，例如“机器人当前真正卡在哪里？”“她从竞赛走向机器人研究的关键转折是什么？”",
+      `- 使用自然的 ${label} 问题句，问题要具体、有信息指向，不要混用其他语言`,
+    );
   }
 
   function formatTimestamp(totalSeconds) {
@@ -289,9 +348,22 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
   }
 
   function isModelJsonError(error) {
-    return /^(模型返回内容不是有效 JSON|模型返回内容不是观点数组|结构化汇总不是有效 JSON|结构化汇总缺少概览或分区|结构化汇总没有有效分区)/.test(
+    return /^(模型返回内容不是有效 JSON|模型返回内容不是观点数组|概览不是有效 JSON|概览内容为空|结构化汇总不是有效 JSON|结构化汇总缺少分区|结构化汇总没有有效分区)/.test(
       error?.message || "",
     );
+  }
+
+  function parseOverviewJson(text) {
+    let parsed;
+    try {
+      parsed = JSON.parse(cleanJsonText(text));
+    } catch {
+      throw new Error("概览不是有效 JSON");
+    }
+    const overview =
+      typeof parsed?.overview === "string" ? parsed.overview.trim() : "";
+    if (!overview) throw new Error("概览内容为空");
+    return overview;
   }
 
   function structurePointLines(points) {
@@ -309,8 +381,8 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     }
     const overview =
       typeof parsed?.overview === "string" ? parsed.overview.trim() : "";
-    if (!overview || !Array.isArray(parsed?.sections)) {
-      throw new Error("结构化汇总缺少概览或分区");
+    if (!Array.isArray(parsed?.sections)) {
+      throw new Error("结构化汇总缺少分区");
     }
 
     const seenStarts = new Set();
@@ -403,6 +475,94 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
         return true;
       })
       .slice(0, 4);
+  }
+
+  function isQuestionLikeLabel(label) {
+    const text = String(label || "").trim();
+    if (!text) return false;
+    const lower = text.toLocaleLowerCase();
+    return Boolean(
+      /[?？]/.test(text) ||
+        /(什么|为何|为什么|怎么|如何|哪些|哪一|哪里|能否|是否|值不值得|该不该|怎样|谁|何时|有多|多大|多难)/.test(text) ||
+        /^(what|why|how|which|where|when|who|is|are|do|does|can|could|should|would)\b/.test(lower),
+    );
+  }
+
+  function isGenericRecommendationLabel(label) {
+    const normalized = String(label || "")
+      .trim()
+      .replace(/\s+/g, "")
+      .replace(/[?？。.!！]/g, "");
+    return new Set([
+      "了解核心观点",
+      "只看核心观点",
+      "学习方法论",
+      "了解行业趋势",
+      "了解背景信息",
+      "掌握主要内容",
+      "查看重点内容",
+    ]).has(normalized);
+  }
+
+  function normalizeDefaultRecommendations(items, points = []) {
+    const validTimestamps = new Set(
+      dedupePointsByTimestamp(points).map((point) =>
+        Math.max(0, Math.floor(Number(point.t) || 0)),
+      ),
+    );
+    const seenLabels = new Set();
+    const recommendations = [];
+    for (const item of Array.isArray(items) ? items : []) {
+      const label =
+        typeof item?.label === "string"
+          ? item.label.trim().replace(/\s+/g, " ")
+          : "";
+      const labelLength = [...label].length;
+      const normalizedLabel = label
+        .toLocaleLowerCase()
+        .replace(/\s+/g, "")
+        .replace(/[?？。.!！]/g, "");
+      if (
+        labelLength < 4 ||
+        labelLength > 80 ||
+        seenLabels.has(normalizedLabel) ||
+        !isQuestionLikeLabel(label) ||
+        isGenericRecommendationLabel(label)
+      ) {
+        continue;
+      }
+      const seenTimestamps = new Set();
+      const pointTs = (Array.isArray(item?.pointTs) ? item.pointTs : [])
+        .filter((timestamp) => Number.isFinite(Number(timestamp)))
+        .map((timestamp) => Math.max(0, Math.floor(Number(timestamp))))
+        .filter((timestamp) => {
+          if (!validTimestamps.has(timestamp) || seenTimestamps.has(timestamp)) {
+            return false;
+          }
+          seenTimestamps.add(timestamp);
+          return true;
+        })
+        .sort((a, b) => a - b)
+        .slice(0, 4);
+      if (!pointTs.length) continue;
+      seenLabels.add(normalizedLabel);
+      recommendations.push({ label, pointTs });
+      if (recommendations.length >= 4) break;
+    }
+    return recommendations;
+  }
+
+  function parseDefaultRecommendationsJson(text, points = []) {
+    let parsed;
+    try {
+      parsed = JSON.parse(cleanJsonText(text));
+    } catch {
+      throw new Error("默认推荐问题不是有效 JSON");
+    }
+    if (!Array.isArray(parsed?.recommendations)) {
+      throw new Error("默认推荐问题缺少 recommendations 数组");
+    }
+    return normalizeDefaultRecommendations(parsed.recommendations, points);
   }
 
   function parseSseEventBlock(block) {
@@ -550,6 +710,78 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     }
   }
 
+  async function requestOverview(segments, options) {
+    const {
+      apiKey,
+      baseUrl = "https://api.deepseek.com",
+      fetchImpl = fetch,
+      maxJsonRetries = 1,
+      timeoutMs = 60000,
+      signal,
+    } = options;
+    if (!apiKey) throw new Error("请先在插件设置里填入 API Key");
+
+    const transcript = (Array.isArray(segments) ? segments : [])
+      .filter(
+        (segment) =>
+          segment?.text && Number.isFinite(Number(segment.tMs)),
+      )
+      .map(segmentLine)
+      .join("\n");
+    if (!transcript) throw new Error("字幕内容为空，无法生成概览");
+
+    const maxAttempts = Math.max(1, Math.floor(Number(maxJsonRetries) || 0) + 1);
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const abortFromParent = () => controller.abort();
+      if (signal?.aborted) controller.abort();
+      else signal?.addEventListener?.("abort", abortFromParent, { once: true });
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetchImpl(endpointFor(baseUrl), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "deepseek-chat",
+            messages: [
+              {
+                role: "system",
+                content: overviewPromptForLanguage(options.targetLanguage),
+              },
+              { role: "user", content: transcript },
+            ],
+            stream: true,
+            temperature: 0.2,
+          }),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`概览服务请求失败（HTTP ${response.status}）`);
+        }
+        return parseOverviewJson(await readSseContent(response));
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          if (signal?.aborted) throw new Error("摘要生成已取消");
+          throw new Error("概览生成超时，请重试");
+        }
+        if (/^概览服务请求失败/.test(error?.message || "")) throw error;
+        if (/^概览(?:不是有效 JSON|内容为空)/.test(error?.message || "")) {
+          if (attempt < maxAttempts) continue;
+          throw error;
+        }
+        if (error?.message === "摘要生成已取消") throw error;
+        throw new Error("无法连接概览服务，请检查网络后重试");
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener?.("abort", abortFromParent);
+      }
+    }
+    throw new Error("概览不是有效 JSON");
+  }
+
   async function requestIntentMatches(intent, points, options) {
     const {
       apiKey,
@@ -609,6 +841,77 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     throw new Error("推荐结果不是有效 JSON");
   }
 
+  async function requestDefaultRecommendations(points, options) {
+    const {
+      apiKey,
+      baseUrl = "https://api.deepseek.com",
+      fetchImpl = fetch,
+      maxJsonRetries = 1,
+      timeoutMs = 60000,
+      signal,
+    } = options;
+    if (!apiKey) throw new Error("请先在插件设置里填入 API Key");
+
+    const pointText = intentPointLines(points);
+    if (!pointText) return [];
+
+    const maxAttempts = Math.max(1, Math.floor(Number(maxJsonRetries) || 0) + 1);
+    for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+      const controller = new AbortController();
+      const abortFromParent = () => controller.abort();
+      if (signal?.aborted) controller.abort();
+      else signal?.addEventListener?.("abort", abortFromParent, { once: true });
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const response = await fetchImpl(endpointFor(baseUrl), {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: "deepseek-chat",
+            messages: [
+              {
+                role: "system",
+                content: defaultRecommendationPromptForLanguage(
+                  options.targetLanguage,
+                ),
+              },
+              { role: "user", content: `视频观点：\n${pointText}` },
+            ],
+            stream: true,
+            temperature: 0.2,
+          }),
+          signal: controller.signal,
+        });
+        if (!response.ok) {
+          throw new Error(`默认推荐请求失败（HTTP ${response.status}）`);
+        }
+        return parseDefaultRecommendationsJson(
+          await readSseContent(response),
+          points,
+        );
+      } catch (error) {
+        if (error?.name === "AbortError") {
+          if (signal?.aborted) throw new Error("摘要生成已取消");
+          throw new Error("默认推荐请求超时，请重试");
+        }
+        if (/^默认推荐请求失败/.test(error?.message || "")) throw error;
+        if (/^默认推荐问题/.test(error?.message || "")) {
+          if (attempt < maxAttempts) continue;
+          throw error;
+        }
+        if (error?.message === "摘要生成已取消") throw error;
+        throw new Error("无法连接推荐服务，请检查网络后重试");
+      } finally {
+        clearTimeout(timeout);
+        signal?.removeEventListener?.("abort", abortFromParent);
+      }
+    }
+    throw new Error("默认推荐问题不是有效 JSON");
+  }
+
   async function storageGet(storage, key) {
     return new Promise((resolve, reject) => {
       storage.get(key, (result) => {
@@ -627,6 +930,92 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
         else resolve();
       });
     });
+  }
+
+  function isCurrentSummary(summary, videoId, targetLanguage) {
+    return Boolean(
+      summary?.videoId === videoId &&
+        summary?.schemaVersion === SUMMARY_SCHEMA_VERSION &&
+        summary?.promptVersion === SUMMARY_PROMPT_VERSION &&
+        normalizeSummaryLanguage(summary?.targetLanguage) === targetLanguage,
+    );
+  }
+
+  async function getCachedOverview(videoId, rawTargetLanguage, storage) {
+    const targetLanguage = normalizeSummaryLanguage(rawTargetLanguage);
+    const key = overviewCacheKey(videoId, targetLanguage);
+    const cached = await storageGet(storage, key);
+    if (
+      cached?.videoId === videoId &&
+      normalizeSummaryLanguage(cached?.targetLanguage) === targetLanguage &&
+      cached?.promptVersion === OVERVIEW_PROMPT_VERSION &&
+      typeof cached?.overview === "string" &&
+      cached.overview.trim()
+    ) {
+      return {
+        overview: cached.overview.trim(),
+        generatedAt: Number(cached.generatedAt) || 0,
+        source: "overview-cache",
+      };
+    }
+
+    const summary = await storageGet(
+      storage,
+      summaryCacheKey(videoId, targetLanguage),
+    );
+    if (
+      isCurrentSummary(summary, videoId, targetLanguage) &&
+      typeof summary.overview === "string" &&
+      summary.overview.trim()
+    ) {
+      return {
+        overview: summary.overview.trim(),
+        generatedAt: Number(summary.generatedAt) || 0,
+        source: "legacy-summary",
+      };
+    }
+    return null;
+  }
+
+  async function generateOverview(input, options) {
+    const videoId = String(input?.videoId || "");
+    const targetLanguage = normalizeSummaryLanguage(input?.targetLanguage);
+    if (!videoId) throw new TypeError("缺少 videoId");
+
+    const existing = await getCachedOverview(
+      videoId,
+      targetLanguage,
+      options.storage,
+    );
+    if (existing) return { ...existing, cached: true };
+    if (options.signal?.aborted) throw new Error("摘要生成已取消");
+
+    const overview = await requestOverview(input.segments, {
+      ...options,
+      targetLanguage,
+    });
+    if (options.signal?.aborted) throw new Error("摘要生成已取消");
+
+    const generatedAt = options.now ? options.now() : Date.now();
+    const key = overviewCacheKey(videoId, targetLanguage);
+    await storageSet(options.storage, {
+      [key]: {
+        videoId,
+        targetLanguage,
+        promptVersion: OVERVIEW_PROMPT_VERSION,
+        generatedAt,
+        overview,
+      },
+    });
+
+    const summaryKey = summaryCacheKey(videoId, targetLanguage);
+    const summary = await storageGet(options.storage, summaryKey);
+    if (isCurrentSummary(summary, videoId, targetLanguage)) {
+      await storageSet(options.storage, {
+        [summaryKey]: { ...summary, overview },
+      });
+    }
+    return { overview, generatedAt, source: "generated", cached: false };
   }
 
   function normalizeIntent(intent) {
@@ -691,6 +1080,87 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     return { pointTs, cached: false };
   }
 
+  async function getCachedDefaultRecommendations(
+    videoId,
+    rawTargetLanguage,
+    summary,
+    storage,
+  ) {
+    const targetLanguage = normalizeSummaryLanguage(rawTargetLanguage);
+    const key = defaultRecommendationCacheKey(videoId, targetLanguage);
+    const cached = await storageGet(storage, key);
+    if (
+      cached?.videoId === videoId &&
+      normalizeSummaryLanguage(cached?.targetLanguage) === targetLanguage &&
+      cached?.promptVersion === DEFAULT_RECOMMENDATION_PROMPT_VERSION &&
+      Number(cached?.summaryGeneratedAt) === Number(summary?.generatedAt) &&
+      Array.isArray(cached?.recommendations)
+    ) {
+      return {
+        recommendations: normalizeDefaultRecommendations(
+          cached.recommendations,
+          summary?.points,
+        ),
+        generatedAt: Number(cached.generatedAt) || 0,
+        source: "default-recommendation-cache",
+      };
+    }
+    return null;
+  }
+
+  async function generateDefaultRecommendations(input, options) {
+    const videoId = String(input?.videoId || "");
+    const targetLanguage = normalizeSummaryLanguage(input?.targetLanguage);
+    if (!videoId) throw new TypeError("缺少 videoId");
+
+    const summary = await storageGet(
+      options.storage,
+      summaryCacheKey(videoId, targetLanguage),
+    );
+    if (
+      !isCurrentSummary(summary, videoId, targetLanguage) ||
+      !Array.isArray(summary?.points) ||
+      !summary.points.length
+    ) {
+      throw new Error("当前视频摘要尚未生成完成");
+    }
+
+    const cached = await getCachedDefaultRecommendations(
+      videoId,
+      targetLanguage,
+      summary,
+      options.storage,
+    );
+    if (cached) return { ...cached, cached: true };
+    if (options.signal?.aborted) throw new Error("摘要生成已取消");
+
+    const recommendations = await requestDefaultRecommendations(summary.points, {
+      ...options,
+      targetLanguage,
+    });
+    if (options.signal?.aborted) throw new Error("摘要生成已取消");
+
+    const generatedAt = options.now ? options.now() : Date.now();
+    const key = defaultRecommendationCacheKey(videoId, targetLanguage);
+    await storageSet(options.storage, {
+      [key]: {
+        videoId,
+        targetLanguage,
+        promptVersion: DEFAULT_RECOMMENDATION_PROMPT_VERSION,
+        summaryPromptVersion: SUMMARY_PROMPT_VERSION,
+        summaryGeneratedAt: summary.generatedAt,
+        generatedAt,
+        recommendations,
+      },
+    });
+    return {
+      recommendations,
+      generatedAt,
+      source: "generated",
+      cached: false,
+    };
+  }
+
   async function summarizeVideo(input, options) {
     const {
       videoId,
@@ -734,13 +1204,12 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
       });
     }
 
-    let overview = "";
     let sections = [];
     let keyInsights = [];
     let suggestedIntents = [];
     try {
       await options.onStructureStart?.({ pointCount: points.length });
-      ({ overview, sections, keyInsights, suggestedIntents } =
+      ({ sections, keyInsights, suggestedIntents } =
         await requestStructure(points, { ...options, targetLanguage }));
     } catch (error) {
       if (options.signal?.aborted) throw new Error("摘要生成已取消");
@@ -749,6 +1218,11 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
 
     if (options.signal?.aborted) throw new Error("摘要生成已取消");
 
+    const cachedOverview = await getCachedOverview(
+      videoId,
+      targetLanguage,
+      options.storage,
+    );
     const summary = {
       videoId,
       duration: Number(duration) || 0,
@@ -757,7 +1231,7 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
       schemaVersion: SUMMARY_SCHEMA_VERSION,
       promptVersion: SUMMARY_PROMPT_VERSION,
       generatedAt: options.now ? options.now() : Date.now(),
-      overview,
+      overview: cachedOverview?.overview || "",
       sections,
       keyInsights,
       suggestedIntents,
@@ -769,32 +1243,48 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
 
   const api = {
     DEFAULT_SUMMARY_LANGUAGE,
+    DEFAULT_RECOMMENDATION_PROMPT_VERSION,
     SUMMARY_LANGUAGES,
     SUMMARY_PROMPT_VERSION,
     SUMMARY_SCHEMA_VERSION,
+    OVERVIEW_PROMPT_VERSION,
     INTENT_MATCH_PROMPT_VERSION,
+    DEFAULT_RECOMMENDATION_SYSTEM_PROMPT,
     INTENT_MATCH_SYSTEM_PROMPT,
+    OVERVIEW_SYSTEM_PROMPT,
     STRUCTURE_SYSTEM_PROMPT,
     SYSTEM_PROMPT,
     chunkSegments,
     dedupePointsByTimestamp,
+    defaultRecommendationCacheKey,
+    defaultRecommendationPromptForLanguage,
     endpointFor,
     formatTimestamp,
+    generateDefaultRecommendations,
+    generateOverview,
+    getCachedDefaultRecommendations,
+    getCachedOverview,
     intentPointLines,
     matchVideoIntent,
     normalizeSummaryLanguage,
     normalizeIntent,
     parseIntentMatchesJson,
+    parseDefaultRecommendationsJson,
+    parseOverviewJson,
     parsePointsJson,
     parseStructureJson,
     readSseContent,
     requestChunk,
+    requestDefaultRecommendations,
     requestIntentMatches,
+    requestOverview,
     requestStructure,
     recommendationCacheKey,
+    overviewCacheKey,
     segmentLine,
     structurePointLines,
     structurePromptForLanguage,
+    overviewPromptForLanguage,
     summaryCacheKey,
     summaryLanguageLabel,
     systemPromptForLanguage,

@@ -47,7 +47,7 @@
           <h2>选择这次的摘要语言</h2>
           <p id="yvpm-prepare-copy">摘要将使用右上角选择的语言呈现。</p>
           <div class="yvpm-prepare-actions">
-            <span class="yvpm-countdown"><strong id="yvpm-countdown">3</strong> 秒后自动开始</span>
+            <span class="yvpm-countdown"><strong id="yvpm-countdown">6</strong> 秒后自动开始</span>
             <button id="yvpm-generate-now" type="button">立即生成</button>
           </div>
         </div>
@@ -60,9 +60,10 @@
       <div id="yvpm-empty" class="yvpm-empty" hidden>
         打开一个 YouTube 视频即可生成观点地图
       </div>
-      <section id="yvpm-overview" class="yvpm-overview" hidden>
+      <section id="yvpm-overview" class="yvpm-overview" aria-live="polite" hidden>
         <span class="yvpm-overview-label">概览</span>
         <p id="yvpm-overview-text"></p>
+        <button id="yvpm-overview-retry" type="button" hidden>重试概览</button>
       </section>
       <section id="yvpm-intent" class="yvpm-intent" hidden>
         <h2>你想从这期视频中获得什么？</h2>
