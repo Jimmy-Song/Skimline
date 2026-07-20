@@ -1,0 +1,31 @@
+{
+  "manifest_version": 3,
+  "name": "Skimline",
+  "version": "0.1.0",
+  "description": "Skim any long YouTube video into a scannable, jump-anywhere map of its ideas.",
+  "permissions": ["storage", "scripting", "sidePanel"],
+  "host_permissions": ["*://*.youtube.com/*", "https://api.deepseek.com/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": ["*://*.youtube.com/*"],
+      "js": ["caption-utils.js", "ui-utils.js", "content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": ["injected.js"],
+      "matches": ["*://*.youtube.com/*"]
+    }
+  ],
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_page": "options.html",
+  "action": {
+    "default_title": "Skimline"
+  }
+}

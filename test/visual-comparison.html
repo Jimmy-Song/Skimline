@@ -1,0 +1,492 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>核心洞见视觉方案对比 - Skimline</title>
+  <style>
+    :root {
+      --bg-panel: #fdfcfa;
+      --text-primary: #1c1b19;
+      --text-secondary: #57564f;
+      --text-muted: #908e86;
+      --surface-1: #f3f2ef;
+      --divider: rgba(0, 0, 0, 0.07);
+      --accent-warm: #b0710f;
+      --expand-fill: rgba(176, 113, 15, 0.06);
+      --expand-border: rgba(176, 113, 15, 0.14);
+      --overview-fill: rgba(176, 113, 15, 0.035);
+      --hover: rgba(176, 113, 15, 0.045);
+      --insight-subtle: rgba(176, 113, 15, 0.04);
+      --font-claim: Georgia, "Noto Serif SC", "Songti SC", "STSong", serif;
+      --font-time: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+      --font-detail: -apple-system, "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      padding: 20px;
+      font-family: var(--font-detail);
+      background: #e5e5e5;
+    }
+
+    h1 {
+      font-size: 18px;
+      margin: 0 0 20px;
+      color: var(--text-primary);
+    }
+
+    .comparison-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(360px, 1fr));
+      gap: 20px;
+      max-width: 1600px;
+    }
+
+    .scheme {
+      background: white;
+      border-radius: 8px;
+      padding: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+    }
+
+    .scheme-title {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 0 0 8px;
+      color: var(--text-primary);
+    }
+
+    .scheme-desc {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin: 0 0 16px;
+      line-height: 1.5;
+    }
+
+    .panel-mock {
+      background: var(--bg-panel);
+      border-radius: 14px;
+      overflow: hidden;
+      border: 1px solid var(--divider);
+    }
+
+    .overview {
+      padding: 15px 16px 16px;
+      background: var(--overview-fill);
+      border-bottom: 0.5px solid var(--divider);
+    }
+
+    .overview-label {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--text-muted);
+      font: 500 10.5px/1.4 var(--font-detail);
+      letter-spacing: 0.08em;
+    }
+
+    .overview-text {
+      margin: 0;
+      color: var(--text-primary);
+      font: 400 13px/1.65 var(--font-claim);
+    }
+
+    .insights-header {
+      padding: 12px 16px;
+      background: var(--surface-1);
+      border-bottom: 0.5px solid var(--divider);
+      font: 500 11px/1.4 var(--font-detail);
+      color: var(--text-secondary);
+      letter-spacing: 0.05em;
+    }
+
+    .insights-compact {
+      border-bottom: 0.5px solid var(--divider);
+    }
+
+    .insight-compact-item {
+      padding: 10px 16px;
+      border-bottom: 0.5px solid var(--divider);
+      cursor: pointer;
+      transition: background 120ms;
+    }
+
+    .insight-compact-item:hover {
+      background: var(--hover);
+    }
+
+    .insight-compact-item:last-child {
+      border-bottom: none;
+    }
+
+    .insight-compact-time {
+      font: 10px/1.4 var(--font-time);
+      color: var(--accent-warm);
+      margin-bottom: 4px;
+    }
+
+    .insight-compact-text {
+      font: 13px/1.5 var(--font-claim);
+      color: var(--text-primary);
+    }
+
+    .section {
+      position: relative;
+    }
+
+    .section-header {
+      display: flex;
+      align-items: stretch;
+      min-height: 40px;
+      border-top: 0.5px solid var(--divider);
+      border-bottom: 0.5px solid var(--divider);
+      background: var(--surface-1);
+    }
+
+    .section-title {
+      flex: 1;
+      padding: 9px 16px;
+      color: var(--text-primary);
+      font: 500 13px/1.45 var(--font-detail);
+    }
+
+    .section-range {
+      padding: 9px 16px 9px 8px;
+      color: var(--text-muted);
+      font: 10px/1.45 var(--font-time);
+    }
+
+    .point {
+      border-bottom: 0.5px solid var(--divider);
+      padding: 13px 16px;
+      position: relative;
+      transition: background 120ms;
+    }
+
+    .point:hover {
+      background: var(--hover);
+    }
+
+    .point-time {
+      display: block;
+      margin-bottom: 4px;
+      color: var(--text-muted);
+      font: 11px/1.35 var(--font-time);
+    }
+
+    .point-claim {
+      display: block;
+      color: var(--text-primary);
+      font: 400 13px/1.5 var(--font-claim);
+    }
+
+    /* 方案 A: 最小标记 */
+    .scheme-a .key-insight .point-time::before {
+      content: '◆ ';
+      color: var(--accent-warm);
+      margin-right: 2px;
+    }
+
+    /* 方案 B: 左缘条 */
+    .scheme-b .key-insight {
+      border-left: 2px solid var(--accent-warm);
+      padding-left: 14px;
+    }
+
+    .scheme-b .key-insight .point-time::before {
+      content: '◆ ';
+      color: var(--accent-warm);
+      margin-right: 2px;
+    }
+
+    /* 方案 C: 浅色背景 + 左缘条 */
+    .scheme-c .key-insight {
+      border-left: 2px solid var(--accent-warm);
+      padding-left: 14px;
+      background: var(--insight-subtle);
+    }
+
+    .scheme-c .key-insight .point-time::before {
+      content: '◆ ';
+      color: var(--accent-warm);
+      margin-right: 2px;
+    }
+
+    /* 方案 D: 顶部独立区块 - 已在HTML结构中 */
+
+    /* 方案 E: 卡片式 */
+    .insight-card {
+      margin: 12px 16px;
+      border: 1px solid var(--expand-border);
+      border-radius: 10px;
+      padding: 13px;
+      background: var(--expand-fill);
+    }
+
+    .insight-card-header {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .insight-card-icon {
+      color: var(--accent-warm);
+      font-size: 11px;
+    }
+
+    .insight-card-time {
+      color: var(--accent-warm);
+      font: 10px/1.4 var(--font-time);
+    }
+
+    .insight-card-label {
+      color: var(--accent-warm);
+      font: 500 10px/1.4 var(--font-detail);
+      letter-spacing: 0.05em;
+    }
+
+    .insight-card-claim {
+      margin: 0 0 10px;
+      color: var(--text-primary);
+      font: 500 13px/1.5 var(--font-claim);
+    }
+
+    .insight-card-why {
+      margin: 0 0 10px;
+      padding: 10px;
+      background: rgba(255, 255, 255, 0.5);
+      border-radius: 6px;
+      color: var(--text-secondary);
+      font: 12px/1.7 var(--font-detail);
+    }
+
+    .insight-card-why strong {
+      color: var(--text-primary);
+      font-weight: 500;
+    }
+
+    .insight-card-seek {
+      border: 0;
+      padding: 2px 0;
+      background: transparent;
+      color: var(--accent-warm);
+      cursor: pointer;
+      font: 12px/1.5 var(--font-detail);
+    }
+  </style>
+</head>
+<body>
+  <h1>核心洞见视觉方案对比 - 选择你最喜欢的</h1>
+
+  <div class="comparison-grid">
+
+    <!-- 方案 A: 最小标记 -->
+    <div class="scheme scheme-a">
+      <div class="scheme-title">方案 A - 最小标记（极克制）</div>
+      <div class="scheme-desc">只在核心洞见的时间戳前加小钻石 ◆，颜色为暖色，其他完全不变。最不打扰现有设计。</div>
+
+      <div class="panel-mock">
+        <div class="overview">
+          <span class="overview-label">概览</span>
+          <p class="overview-text">本视频讨论了 Fable 模型的发布与使用指南，从模型印象、智能特性到实用技巧逐步展开。</p>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Fable模型发布与印象</div>
+            <div class="section-range">08:56–82:37</div>
+          </div>
+
+          <div class="point">
+            <span class="point-time">08:56</span>
+            <span class="point-claim">Fable 模型今天晚些时候发表，具体时间请关注后续消息。</span>
+          </div>
+
+          <div class="point key-insight">
+            <span class="point-time">01:17</span>
+            <span class="point-claim">Fable 是一个让人兴奋的模型，就像 Sonnet 3.5 new、Opus 4、Opus 4.5 一样令人惊喜。</span>
+          </div>
+
+          <div class="point">
+            <span class="point-time">02:07</span>
+            <span class="point-claim">这场演讲会给你一份使用 Fable 这类新模型的实用指南。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 方案 B: 左缘条 -->
+    <div class="scheme scheme-b">
+      <div class="scheme-title">方案 B - 左缘强调条（推荐）</div>
+      <div class="scheme-desc">左侧 2px 暖色竖条 + 时间戳前小钻石。视觉层次清晰且克制，符合现有设计语言。</div>
+
+      <div class="panel-mock">
+        <div class="overview">
+          <span class="overview-label">概览</span>
+          <p class="overview-text">本视频讨论了 Fable 模型的发布与使用指南，从模型印象、智能特性到实用技巧逐步展开。</p>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Fable模型发布与印象</div>
+            <div class="section-range">08:56–82:37</div>
+          </div>
+
+          <div class="point">
+            <span class="point-time">08:56</span>
+            <span class="point-claim">Fable 模型今天晚些时候发表，具体时间请关注后续消息。</span>
+          </div>
+
+          <div class="point key-insight">
+            <span class="point-time">01:17</span>
+            <span class="point-claim">Fable 是一个让人兴奋的模型，就像 Sonnet 3.5 new、Opus 4、Opus 4.5 一样令人惊喜。</span>
+          </div>
+
+          <div class="point">
+            <span class="point-time">02:07</span>
+            <span class="point-claim">这场演讲会给你一份使用 Fable 这类新模型的实用指南。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 方案 C: 浅色背景 + 左缘条 -->
+    <div class="scheme scheme-c">
+      <div class="scheme-title">方案 C - 浅色背景 + 左缘条</div>
+      <div class="scheme-desc">左侧 2px 暖色竖条 + 整行浅暖底色 + 时间戳前小钻石。面积感强，一眼能看到。</div>
+
+      <div class="panel-mock">
+        <div class="overview">
+          <span class="overview-label">概览</span>
+          <p class="overview-text">本视频讨论了 Fable 模型的发布与使用指南，从模型印象、智能特性到实用技巧逐步展开。</p>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Fable模型发布与印象</div>
+            <div class="section-range">08:56–82:37</div>
+          </div>
+
+          <div class="point">
+            <span class="point-time">08:56</span>
+            <span class="point-claim">Fable 模型今天晚些时候发表，具体时间请关注后续消息。</span>
+          </div>
+
+          <div class="point key-insight">
+            <span class="point-time">01:17</span>
+            <span class="point-claim">Fable 是一个让人兴奋的模型，就像 Sonnet 3.5 new、Opus 4、Opus 4.5 一样令人惊喜。</span>
+          </div>
+
+          <div class="point">
+            <span class="point-time">02:07</span>
+            <span class="point-claim">这场演讲会给你一份使用 Fable 这类新模型的实用指南。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 方案 D: 顶部独立区块 -->
+    <div class="scheme scheme-d">
+      <div class="scheme-title">方案 D - 顶部独立区块（最强调）</div>
+      <div class="scheme-desc">在概览下方单独一个"核心洞见"区块，只显示 2-3 个精华观点。用户打开面板立刻看到。</div>
+
+      <div class="panel-mock">
+        <div class="overview">
+          <span class="overview-label">概览</span>
+          <p class="overview-text">本视频讨论了 Fable 模型的发布与使用指南，从模型印象、智能特性到实用技巧逐步展开。</p>
+        </div>
+
+        <div class="insights-header">◆ 核心洞见</div>
+        <div class="insights-compact">
+          <div class="insight-compact-item">
+            <div class="insight-compact-time">01:17</div>
+            <div class="insight-compact-text">Fable 是一个让人兴奋的模型，就像 Sonnet 3.5 new、Opus 4 一样令人惊喜。</div>
+          </div>
+          <div class="insight-compact-item">
+            <div class="insight-compact-time">14:25</div>
+            <div class="insight-compact-text">AI时代的编程需要重新思考问题分解和上下文管理方式。</div>
+          </div>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Fable模型发布与印象</div>
+            <div class="section-range">08:56–82:37</div>
+          </div>
+
+          <div class="point">
+            <span class="point-time">08:56</span>
+            <span class="point-claim">Fable 模型今天晚些时候发表，具体时间请关注后续消息。</span>
+          </div>
+
+          <div class="point">
+            <span class="point-time">01:17</span>
+            <span class="point-claim">Fable 是一个让人兴奋的模型，就像 Sonnet 3.5 new、Opus 4、Opus 4.5 一样令人惊喜。</span>
+          </div>
+
+          <div class="point">
+            <span class="point-time">02:07</span>
+            <span class="point-claim">这场演讲会给你一份使用 Fable 这类新模型的实用指南。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 方案 E: 卡片式 -->
+    <div class="scheme scheme-e">
+      <div class="scheme-title">方案 E - 折叠式洞见卡片</div>
+      <div class="scheme-desc">核心洞见显示为独立卡片，嵌入在原位置。包含"为什么重要"说明，信息最完整。</div>
+
+      <div class="panel-mock">
+        <div class="overview">
+          <span class="overview-label">概览</span>
+          <p class="overview-text">本视频讨论了 Fable 模型的发布与使用指南，从模型印象、智能特性到实用技巧逐步展开。</p>
+        </div>
+
+        <div class="section">
+          <div class="section-header">
+            <div class="section-title">Fable模型发布与印象</div>
+            <div class="section-range">08:56–82:37</div>
+          </div>
+
+          <div class="point">
+            <span class="point-time">08:56</span>
+            <span class="point-claim">Fable 模型今天晚些时候发表，具体时间请关注后续消息。</span>
+          </div>
+
+          <div class="insight-card">
+            <div class="insight-card-header">
+              <span class="insight-card-icon">◆</span>
+              <span class="insight-card-time">01:17</span>
+              <span class="insight-card-label">核心洞见</span>
+            </div>
+            <p class="insight-card-claim">Fable 是一个让人兴奋的模型，就像 Sonnet 3.5 new、Opus 4、Opus 4.5 一样令人惊喜。</p>
+            <div class="insight-card-why">
+              <strong>为什么重要：</strong>它代表了 AI 编程助手能力的又一次跃迁，意味着开发者可以把更复杂的任务交给模型处理。
+            </div>
+            <button class="insight-card-seek">▶ 看这段</button>
+          </div>
+
+          <div class="point">
+            <span class="point-time">02:07</span>
+            <span class="point-claim">这场演讲会给你一份使用 Fable 这类新模型的实用指南。</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <script>
+    // 简单的交互演示
+    document.querySelectorAll('.point').forEach(point => {
+      point.addEventListener('click', () => {
+        console.log('观点被点击');
+      });
+    });
+  </script>
+</body>
+</html>
