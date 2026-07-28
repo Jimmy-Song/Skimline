@@ -18,8 +18,11 @@ test("Manifest V3 声明 Side Panel 且不请求多余高权限", () => {
   );
   assert.deepEqual(manifest.permissions, ["storage", "scripting", "sidePanel"]);
   assert.ok(manifest.content_scripts[0].js.includes("content.js"));
+  assert.ok(manifest.content_scripts[0].js.includes("transcript-utils.js"));
   assert.deepEqual(manifest.content_scripts[0].matches, ["*://*.youtube.com/*"]);
   assert.equal(manifest.content_scripts[0].css, undefined);
+  assert.equal(manifest.web_accessible_resources, undefined);
+  assert.equal(manifest.minimum_chrome_version, "114");
   assert.equal(manifest.side_panel.default_path, "sidepanel.html");
   assert.equal(manifest.options_page, "options.html");
   assert.equal(manifest.background.service_worker, "background.js");
@@ -70,38 +73,49 @@ test("内容脚本保留字幕兜底并作为视频消息桥", () => {
   assert.match(source, /type: "PLAYBACK_TIME"/);
   assert.match(source, /type: "VIDEO_CHANGED"/);
   assert.match(source, /captionInfo\.videoId !== requestedVideoId/);
-  assert.match(source, /event\.data\?\.requestId !== requestId/);
-  assert.match(source, /event\.data\?\.videoId !== requestedVideoId/);
+  assert.match(source, /type: "READ_PLAYER_CAPTION_TRACKS"/);
   assert.match(source, /fetchCaptionSegments\(track\)/);
-  assert.match(source, /requestTranscriptFallback\(requestedVideoId\)/);
+  assert.match(source, /extractTranscriptFallback/);
+  assert.doesNotMatch(source, /createElement\(["']script["']\)/);
+  assert.doesNotMatch(source, /runtime\.getURL\(["']injected\.js["']\)/);
+  assert.doesNotMatch(source, /window\.postMessage/);
   assert.doesNotMatch(source, /yvpm-trigger|createShell|TOGGLE_PANEL/);
 });
 
 test("长视频文字记录优先读取已打开面板，再按需打开并关闭原生面板", () => {
-  const injected = fs.readFileSync(path.join(root, "injected.js"), "utf8");
+  const transcript = fs.readFileSync(
+    path.join(root, "transcript-utils.js"),
+    "utf8",
+  );
   const content = fs.readFileSync(path.join(root, "content.js"), "utf8");
-  assert.match(injected, /timeoutMs = 30000/);
-  assert.match(content, /}, 35000\);/);
-  assert.match(injected, /ytd-transcript-segment-renderer/);
-  assert.match(injected, /transcript-segment-view-model/);
-  assert.match(injected, /\.segment-timestamp/);
-  assert.match(injected, /\.segment-text/);
-  assert.match(injected, /parseTranscriptDom\(documentRef\)/);
-  assert.match(injected, /if \(existingSegments\.length\) return existingSegments/);
-  assert.match(injected, /selectMatchingPlayerResponse/);
-  assert.match(injected, /waitForPlayerResponse/);
-  assert.match(injected, /pendingFallbackByVideoId/);
-  assert.match(content, /当前 player response 没有字幕轨道/);
-  assert.match(content, /requestTranscriptFallback\(requestedVideoId\)/);
+  assert.match(transcript, /timeoutMs = 30000/);
+  assert.match(transcript, /ytd-transcript-segment-renderer/);
+  assert.match(transcript, /transcript-segment-view-model/);
+  assert.match(transcript, /\.segment-timestamp/);
+  assert.match(transcript, /\.segment-text/);
+  assert.match(transcript, /parseTranscriptDom\(documentRef\)/);
   assert.match(
-    injected,
-    /engagement-panel-searchable-transcript[\s\S]*\/close\|关闭\/i/,
+    transcript,
+    /if \(existingSegments\.length\) return existingSegments/,
+  );
+  assert.match(transcript, /findTranscriptOpenButton/);
+  assert.match(content, /当前 player response 没有字幕轨道/);
+  assert.match(content, /extractTranscriptFallback/);
+  assert.match(
+    transcript,
+    /engagement-panel-searchable-transcript[\s\S]*\/close\|关闭\|關閉/,
   );
 });
 
 test("工具栏动作打开 Side Panel，不再切换页面浮层", () => {
   const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
   assert.match(background, /chrome\.sidePanel/);
+  assert.match(background, /chrome\.scripting\.executeScript/);
+  assert.match(background, /world: "MAIN"/);
+  assert.match(background, /sender\?\.frameId !== 0/);
+  assert.match(background, /READ_PLAYER_CAPTION_TRACKS/);
+  assert.match(background, /result\.status === "player_unavailable"/);
+  assert.doesNotMatch(background, /runtime\.getURL\(["']injected\.js["']\)/);
   assert.match(background, /setPanelBehavior/);
   assert.match(background, /openPanelOnActionClick: true/);
   assert.match(background, /summary\?\.videoId === message\.videoId/);
@@ -109,6 +123,10 @@ test("工具栏动作打开 Side Panel，不再切换页面浮层", () => {
   assert.match(background, /YouTubeSummary\.matchVideoIntent/);
   assert.match(background, /message\?\.type === "GET_DEFAULT_RECOMMENDATIONS"/);
   assert.match(background, /YouTubeSummary\.generateDefaultRecommendations/);
+  assert.match(background, /message\?\.type === "EXPLAIN_VIDEO_SELECTION"/);
+  assert.match(background, /YouTubeSummary\.explainVideoSelection/);
+  assert.match(background, /message\?\.type === "CANCEL_CONTEXT_EXPLANATION"/);
+  assert.match(background, /const explanationControllers = new Map\(\)/);
   assert.match(background, /YouTubeSummary\.summaryCacheKey/);
   assert.match(background, /generationId/);
   assert.match(background, /message\?\.type === "CANCEL_GENERATION"/);
@@ -146,6 +164,9 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(html, /id="yvpm-prepare"/);
   assert.match(html, /id="yvpm-generation-bar"/);
   assert.match(html, /id="yvpm-overview-retry"/);
+  assert.match(html, /id="yvpm-explain-menu"/);
+  assert.match(html, /id="yvpm-explanation-card"/);
+  assert.match(html, /id="yvpm-explanation-body"[^>]*aria-live="polite"/);
   assert.match(html, /id="yvpm-countdown">6</);
   assert.match(html, /id="yvpm-overview"[^>]*aria-live="polite"/);
   assert.match(html, /打开一个 YouTube 视频即可生成观点地图/);
@@ -181,6 +202,14 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(source, /function runRecommendation/);
   assert.match(source, /function runDefaultRecommendation/);
   assert.match(source, /function loadDefaultRecommendations/);
+  assert.match(source, /function captureExplainableSelection/);
+  assert.match(source, /function runInitialExplanation/);
+  assert.match(source, /function askExplanation/);
+  assert.match(source, /type: "EXPLAIN_VIDEO_SELECTION"/);
+  assert.match(source, /type: "CANCEL_CONTEXT_EXPLANATION"/);
+  assert.match(source, /type: "GET_CAPTION_SEGMENTS"/);
+  assert.match(source, /MAX_EXPLANATION_SELECTION_CHARS = 200/);
+  assert.match(source, /MAX_EXPLANATION_TURNS = 3/);
   assert.match(source, /type: "MATCH_SUMMARY_INTENT"/);
   assert.match(source, /type: "GET_DEFAULT_RECOMMENDATIONS"/);
   assert.match(source, /applyRecommendation\(intent, question\.pointTs, \{ source: "default" \}\)/);
@@ -223,6 +252,9 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(css, /\.yvpm-matchbar/);
   assert.match(css, /\.yvpm-row\.yvpm-recommended/);
   assert.match(css, /\.yvpm-insight-card-header/);
+  assert.match(css, /\.yvpm-explain-menu/);
+  assert.match(css, /\.yvpm-explanation-card/);
+  assert.match(css, /::highlight\(yvpm-explanation-selection\)/);
   assert.match(css, /\.yvpm-insight-card-icon/);
   assert.match(css, /\.yvpm-insight-card-time/);
   assert.match(css, /\.yvpm-insight-card-label/);

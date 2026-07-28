@@ -4,7 +4,9 @@
   function getVideoId(url = root.location?.href || "") {
     try {
       const parsed = new URL(url);
-      return parsed.hostname.endsWith("youtube.com") && parsed.pathname === "/watch"
+      const hostname = parsed.hostname.toLowerCase();
+      return (hostname === "youtube.com" || hostname.endsWith(".youtube.com")) &&
+        parsed.pathname === "/watch"
         ? parsed.searchParams.get("v") || ""
         : "";
     } catch {
@@ -67,6 +69,29 @@
     return hours > 0
       ? `${hours}:${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`
       : `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
+  }
+
+  function normalizeTextScale(
+    value,
+    { min = 85, max = 125, defaultValue = 100 } = {},
+  ) {
+    const lower = Math.min(Number(min), Number(max));
+    const upper = Math.max(Number(min), Number(max));
+    const fallback = Number.isFinite(Number(defaultValue))
+      ? Number(defaultValue)
+      : 100;
+    if (
+      value === null ||
+      value === undefined ||
+      (typeof value === "string" && !value.trim())
+    ) {
+      return Math.min(upper, Math.max(lower, Math.round(fallback)));
+    }
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed)) {
+      return Math.min(upper, Math.max(lower, Math.round(fallback)));
+    }
+    return Math.min(upper, Math.max(lower, Math.round(parsed)));
   }
 
   function groupPointsBySections(points, sections) {
@@ -151,6 +176,7 @@
     getVideoId,
     groupPointsBySections,
     mergePointsByTimestamp,
+    normalizeTextScale,
     pointIdentity,
     pointStableKey,
     seekVideo,

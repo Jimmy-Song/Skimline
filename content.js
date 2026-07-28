@@ -26,77 +26,43 @@
 
   function requestCaptionTracks(requestedVideoId) {
     return new Promise((resolve, reject) => {
-      const requestId = `${Date.now()}:${Math.random()}`;
-      const timeout = setTimeout(() => {
-        window.removeEventListener("message", onMessage);
-        reject(new Error("读取字幕信息超时，请重试"));
-      }, 10000);
-
-      function onMessage(event) {
-        if (
-          event.source !== window ||
-          event.origin !== window.location.origin ||
-          event.data?.source !== MESSAGE_SOURCE ||
-          event.data?.type !== "CAPTION_TRACKS" ||
-          event.data?.requestId !== requestId ||
-          event.data?.videoId !== requestedVideoId
-        ) {
-          return;
-        }
+      let settled = false;
+      let timeout;
+      const finish = (callback) => {
+        if (settled) return;
+        settled = true;
         clearTimeout(timeout);
-        window.removeEventListener("message", onMessage);
-        resolve(event.data);
-      }
-
-      window.addEventListener("message", onMessage);
-      const script = document.createElement("script");
-      script.src = chrome.runtime.getURL("injected.js");
-      script.dataset.yvpmRequestId = requestId;
-      script.dataset.yvpmVideoId = requestedVideoId;
-      script.onload = () => script.remove();
-      script.onerror = () => {
-        clearTimeout(timeout);
-        window.removeEventListener("message", onMessage);
-        reject(new Error("无法读取 YouTube 字幕信息"));
+        callback();
       };
-      (document.head || document.documentElement).appendChild(script);
-    });
-  }
-
-  function requestTranscriptFallback(requestedVideoId) {
-    return new Promise((resolve, reject) => {
-      const requestId = `${Date.now()}:${Math.random()}`;
-      const timeout = setTimeout(() => {
-        window.removeEventListener("message", onMessage);
-        reject(new Error("读取 YouTube 文字记录超时，请重试"));
-      }, 35000);
-
-      function onMessage(event) {
-        if (
-          event.source !== window ||
-          event.origin !== window.location.origin ||
-          event.data?.source !== MESSAGE_SOURCE ||
-          event.data?.type !== "TRANSCRIPT_FALLBACK_RESULT" ||
-          event.data?.requestId !== requestId ||
-          event.data?.videoId !== requestedVideoId
-        ) {
-          return;
-        }
-        clearTimeout(timeout);
-        window.removeEventListener("message", onMessage);
-        if (event.data.error) reject(new Error(event.data.error));
-        else resolve(event.data.segments || []);
-      }
-
-      window.addEventListener("message", onMessage);
-      window.postMessage(
+      timeout = setTimeout(() => {
+        finish(() => reject(new Error("读取字幕信息超时，请重试")));
+      }, 10000);
+      chrome.runtime.sendMessage(
         {
           source: MESSAGE_SOURCE,
-          type: "REQUEST_TRANSCRIPT_FALLBACK",
-          requestId,
+          type: "READ_PLAYER_CAPTION_TRACKS",
           videoId: requestedVideoId,
         },
-        window.location.origin,
+        (response) => {
+          const runtimeError = chrome.runtime.lastError;
+          if (runtimeError) {
+            finish(() =>
+              reject(new Error(runtimeError.message || "读取字幕信息失败")),
+            );
+            return;
+          }
+          if (!response?.ok) {
+            finish(() =>
+              reject(
+                new Error(
+                  response?.error || "无法读取 YouTube 播放器字幕信息",
+                ),
+              ),
+            );
+            return;
+          }
+          finish(() => resolve(response));
+        },
       );
     });
   }
@@ -126,7 +92,9 @@
     assertCurrentVideo(requestedVideoId);
     if (!segments.length) {
       try {
-        segments = await requestTranscriptFallback(requestedVideoId);
+        segments = await YouTubeSummary.extractTranscriptFallback(
+          requestedVideoId,
+        );
       } catch (error) {
         if (
           !track &&

@@ -3,7 +3,14 @@
 
   const DEFAULT_SECTIONS_COLLAPSED = true;
   const LANGUAGE_SETTING_KEY = "summary_language";
+  const TEXT_SCALE_SETTING_KEY = "content_text_scale";
+  const TEXT_SCALE_MIN = 85;
+  const TEXT_SCALE_MAX = 125;
+  const TEXT_SCALE_DEFAULT = 100;
+  const TEXT_SCALE_EXPANDED_THRESHOLD = 110;
   const PREPARE_COUNTDOWN_SECONDS = 6;
+  const MAX_EXPLANATION_SELECTION_CHARS = 200;
+  const MAX_EXPLANATION_TURNS = 3;
   const LANGUAGE_OPTIONS = {
     auto: "自动（跟随 Chrome）",
     "zh-CN": "简体中文",
@@ -30,6 +37,8 @@
     preparing: false,
     languageSetting: "auto",
     targetLanguage: "zh-CN",
+    textScale: TEXT_SCALE_DEFAULT,
+    textScaleTouched: false,
     activeGenerationId: "",
     activeOverviewGenerationId: "",
     pendingCaptions: null,
@@ -58,6 +67,19 @@
     recommendationPreviousExpanded: null,
     defaultRecommendationRequestId: 0,
     defaultRecommendations: [],
+    explanationClientId:
+      globalThis.crypto?.randomUUID?.() ||
+      `explain-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+    explanationCaptions: null,
+    explanationCaptionsPromise: null,
+    explanationRequestId: 0,
+    explanationSelection: null,
+    explanationRange: null,
+    explanationAnchorContainer: null,
+    explanationHistory: [],
+    explanationTurns: 0,
+    explanationResult: null,
+    explanationQuestion: "",
   };
 
   const elements = {
@@ -89,6 +111,8 @@
     generationBar: document.querySelector("#yvpm-generation-bar"),
     generationCopy: document.querySelector("#yvpm-generation-copy"),
     changeLanguage: document.querySelector("#yvpm-change-language"),
+    textScale: document.querySelector("#yvpm-text-scale"),
+    textScaleReset: document.querySelector("#yvpm-text-scale-reset"),
     languageControl: document.querySelector(".yvpm-language-control"),
     languageButton: document.querySelector("#yvpm-language-button"),
     languageLabel: document.querySelector("#yvpm-language-label"),
@@ -96,6 +120,13 @@
     languageOptions: [
       ...document.querySelectorAll("#yvpm-language-menu [data-language]"),
     ],
+    explainMenu: document.querySelector("#yvpm-explain-menu"),
+    explainSelection: document.querySelector("#yvpm-explain-selection"),
+    copySelection: document.querySelector("#yvpm-copy-selection"),
+    explanationCard: document.querySelector("#yvpm-explanation-card"),
+    explanationTitle: document.querySelector("#yvpm-explanation-title"),
+    explanationBody: document.querySelector("#yvpm-explanation-body"),
+    explanationClose: document.querySelector("#yvpm-explanation-close"),
     toast: document.querySelector("#yvpm-toast"),
   };
 
@@ -135,6 +166,67 @@
   function resolveTargetLanguage(setting = state.languageSetting) {
     const requested = setting === "auto" ? navigator.language : setting;
     return normalizeTargetLanguage(requested);
+  }
+
+  function normalizeTextScale(value) {
+    return YouTubeSummary.normalizeTextScale(value, {
+      min: TEXT_SCALE_MIN,
+      max: TEXT_SCALE_MAX,
+      defaultValue: TEXT_SCALE_DEFAULT,
+    });
+  }
+
+  function textScaleDescription(scale) {
+    if (scale === TEXT_SCALE_DEFAULT) return "标准";
+    return scale < TEXT_SCALE_DEFAULT ? "缩小" : "放大";
+  }
+
+  function applyTextScale(value) {
+    const scale = normalizeTextScale(value);
+    const description = textScaleDescription(scale);
+    const progress =
+      ((scale - TEXT_SCALE_MIN) / (TEXT_SCALE_MAX - TEXT_SCALE_MIN)) * 100;
+    state.textScale = scale;
+    document.documentElement.style.fontSize = `${scale}%`;
+    document.documentElement.dataset.textScale =
+      scale > TEXT_SCALE_EXPANDED_THRESHOLD ? "expanded" : "compact";
+    elements.textScale.value = String(scale);
+    elements.textScale.style.setProperty(
+      "--yvpm-text-scale-progress",
+      `${progress}%`,
+    );
+    elements.textScale.setAttribute(
+      "aria-valuetext",
+      `${scale}%，${description}`,
+    );
+    elements.textScaleReset.textContent = `${scale}%`;
+    elements.textScaleReset.setAttribute(
+      "aria-label",
+      scale === TEXT_SCALE_DEFAULT
+        ? "文字大小已是默认值 100%"
+        : `恢复默认文字大小，当前为 ${scale}%`,
+    );
+    elements.textScaleReset.classList.toggle(
+      "yvpm-text-scale-custom",
+      scale !== TEXT_SCALE_DEFAULT,
+    );
+    return scale;
+  }
+
+  let textScaleSavePromise = Promise.resolve();
+
+  function saveTextScale(value) {
+    const scale = applyTextScale(value);
+    state.textScaleTouched = true;
+    textScaleSavePromise = textScaleSavePromise
+      .catch(() => {})
+      .then(() =>
+        chrome.storage.local.set({ [TEXT_SCALE_SETTING_KEY]: scale }),
+      )
+      .catch(() => {
+        showToast("文字大小已调整，但未能保存到本地。");
+      });
+    return textScaleSavePromise;
   }
 
   function normalizeTargetLanguage(language) {
@@ -200,6 +292,609 @@
     state.toastTimer = setTimeout(() => {
       elements.toast.hidden = true;
     }, 1800);
+  }
+
+  function explanationAllowedContainer(range) {
+    const selector = [
+      "#yvpm-overview-text",
+      ".yvpm-claim",
+      ".yvpm-detail p",
+      ".yvpm-insight-card-why",
+      ".yvpm-insight-card-detail",
+    ].join(", ");
+    const startElement =
+      range?.startContainer?.nodeType === Node.ELEMENT_NODE
+        ? range.startContainer
+        : range?.startContainer?.parentElement;
+    const endElement =
+      range?.endContainer?.nodeType === Node.ELEMENT_NODE
+        ? range.endContainer
+        : range?.endContainer?.parentElement;
+    const container = startElement?.closest?.(selector);
+    return container && container.contains(endElement) ? container : null;
+  }
+
+  function clearExplanationHighlight() {
+    if (globalThis.CSS?.highlights) {
+      CSS.highlights.delete("yvpm-explanation-selection");
+    }
+  }
+
+  function highlightExplanationRange() {
+    clearExplanationHighlight();
+    if (
+      state.explanationRange &&
+      globalThis.CSS?.highlights &&
+      typeof globalThis.Highlight === "function"
+    ) {
+      CSS.highlights.set(
+        "yvpm-explanation-selection",
+        new Highlight(state.explanationRange),
+      );
+    }
+  }
+
+  function explanationAnchorRect() {
+    try {
+      const rect = state.explanationRange?.getBoundingClientRect();
+      if (rect?.width || rect?.height) return rect;
+    } catch {
+      // 重新渲染摘要后旧 Range 可能失效，使用保存的位置兜底。
+    }
+    return state.explanationSelection?.rect || null;
+  }
+
+  function positionExplainMenu(rect = explanationAnchorRect()) {
+    if (!rect || elements.explainMenu.hidden) return;
+    const menuRect = elements.explainMenu.getBoundingClientRect();
+    const left = Math.min(
+      window.innerWidth - menuRect.width - 8,
+      Math.max(8, rect.left + rect.width / 2 - menuRect.width / 2),
+    );
+    const fitsAbove = rect.top >= menuRect.height + 12;
+    const top = fitsAbove
+      ? rect.top - menuRect.height - 8
+      : rect.bottom + 8;
+    elements.explainMenu.style.left = `${Math.round(left)}px`;
+    elements.explainMenu.style.top = `${Math.round(
+      Math.max(56, Math.min(window.innerHeight - menuRect.height - 8, top)),
+    )}px`;
+    elements.explainMenu.classList.toggle(
+      "yvpm-explain-menu-below",
+      !fitsAbove,
+    );
+  }
+
+  function positionExplanationCard() {
+    if (elements.explanationCard.hidden) return;
+    const anchorRect = explanationAnchorRect();
+    const cardRect = elements.explanationCard.getBoundingClientRect();
+    const viewportPadding = 12;
+    const appbarBottom = 60;
+    let top = window.innerHeight - cardRect.height - viewportPadding;
+    if (anchorRect) {
+      const below = anchorRect.bottom + 12;
+      const above = anchorRect.top - cardRect.height - 12;
+      if (window.innerHeight - below >= Math.min(cardRect.height, 280)) {
+        top = below;
+      } else if (above >= appbarBottom + viewportPadding) {
+        top = above;
+      }
+    }
+    elements.explanationCard.style.top = `${Math.round(
+      Math.max(
+        appbarBottom + viewportPadding,
+        Math.min(window.innerHeight - cardRect.height - viewportPadding, top),
+      ),
+    )}px`;
+  }
+
+  function hideExplainMenu() {
+    elements.explainMenu.hidden = true;
+  }
+
+  function explanationAnchorData(container) {
+    const row = container.closest(".yvpm-row");
+    const anchorT = row ? Number(row.dataset.t) : null;
+    const contextSource = row || container;
+    return {
+      anchorT: Number.isFinite(anchorT) ? anchorT : null,
+      anchorContext: String(contextSource.textContent || "")
+        .replace(/\s+/g, " ")
+        .trim()
+        .slice(0, 1200),
+    };
+  }
+
+  function captureExplainableSelection() {
+    if (!elements.explanationCard.hidden) return;
+    const selection = window.getSelection();
+    if (!selection || selection.isCollapsed || !selection.rangeCount) {
+      hideExplainMenu();
+      return;
+    }
+    const range = selection.getRangeAt(0).cloneRange();
+    const container = explanationAllowedContainer(range);
+    if (!container) {
+      hideExplainMenu();
+      return;
+    }
+    const text = selection.toString().replace(/\s+/g, " ").trim();
+    const length = [...text].length;
+    if (!length) {
+      hideExplainMenu();
+      return;
+    }
+    if (length > MAX_EXPLANATION_SELECTION_CHARS) {
+      hideExplainMenu();
+      showToast("选择一小段内容，解释会更准确");
+      return;
+    }
+    const rect = range.getBoundingClientRect();
+    const anchor = explanationAnchorData(container);
+    state.explanationSelection = {
+      text,
+      rect: {
+        top: rect.top,
+        right: rect.right,
+        bottom: rect.bottom,
+        left: rect.left,
+        width: rect.width,
+        height: rect.height,
+      },
+      videoId: state.videoId,
+      targetLanguage: state.targetLanguage,
+      ...anchor,
+    };
+    state.explanationRange = range;
+    state.explanationAnchorContainer = container;
+    elements.explainMenu.hidden = false;
+    positionExplainMenu(rect);
+  }
+
+  function explanationOutline() {
+    return state.points
+      .map(
+        (point) =>
+          `[${Math.max(0, Math.floor(Number(point.t) || 0))}] ${String(
+            point.point || "",
+          ).trim()}：${String(point.detail || "").trim()}`,
+      )
+      .join("\n")
+      .slice(0, 8000);
+  }
+
+  async function getExplanationCaptions(videoId) {
+    const existing =
+      state.explanationCaptions?.videoId === videoId
+        ? state.explanationCaptions
+        : state.overviewCaptions?.videoId === videoId
+          ? state.overviewCaptions
+          : null;
+    if (existing?.segments?.length) return existing;
+    if (state.explanationCaptionsPromise) {
+      return state.explanationCaptionsPromise;
+    }
+    state.explanationCaptionsPromise = tabMessage({
+      type: "GET_CAPTION_SEGMENTS",
+      videoId,
+    })
+      .then((captions) => {
+        if (
+          !captions?.ok ||
+          captions.videoId !== videoId ||
+          !captions.supported ||
+          !Array.isArray(captions.segments) ||
+          !captions.segments.length
+        ) {
+          throw new Error(
+            captions?.error || "当前视频没有可用于解释的字幕",
+          );
+        }
+        if (state.videoId !== videoId) {
+          throw new Error("视频已切换，已取消旧解释");
+        }
+        state.explanationCaptions = captions;
+        return captions;
+      })
+      .finally(() => {
+        state.explanationCaptionsPromise = null;
+      });
+    return state.explanationCaptionsPromise;
+  }
+
+  function cancelExplanationRequest() {
+    state.explanationRequestId += 1;
+    runtimeMessage({
+      type: "CANCEL_CONTEXT_EXPLANATION",
+      clientId: state.explanationClientId,
+    }).catch(() => null);
+  }
+
+  function closeExplanation({ clearSelection = true } = {}) {
+    cancelExplanationRequest();
+    hideExplainMenu();
+    elements.explanationCard.hidden = true;
+    elements.explanationBody.replaceChildren();
+    elements.explanationTitle.textContent = "";
+    state.explanationHistory = [];
+    state.explanationTurns = 0;
+    state.explanationResult = null;
+    state.explanationQuestion = "";
+    if (clearSelection) {
+      clearExplanationHighlight();
+      state.explanationSelection = null;
+      state.explanationRange = null;
+      state.explanationAnchorContainer = null;
+      window.getSelection()?.removeAllRanges();
+    }
+  }
+
+  function resetExplanationContext() {
+    closeExplanation();
+    state.explanationCaptions = null;
+    state.explanationCaptionsPromise = null;
+  }
+
+  function makeElement(tag, className = "", text = "") {
+    const element = document.createElement(tag);
+    if (className) element.className = className;
+    if (text) element.textContent = text;
+    return element;
+  }
+
+  function showExplanationCard() {
+    elements.explanationCard.hidden = false;
+    requestAnimationFrame(positionExplanationCard);
+  }
+
+  function renderExplanationLoading() {
+    elements.explanationTitle.textContent =
+      state.explanationSelection?.text || "解释所选内容";
+    const status = makeElement("div", "yvpm-explanation-loading");
+    const spinner = makeElement("span", "yvpm-spinner");
+    spinner.setAttribute("aria-hidden", "true");
+    status.append(spinner, document.createTextNode("正在结合整段视频理解这段内容…"));
+    const hint = makeElement(
+      "p",
+      "yvpm-explanation-loading-hint",
+      "会优先查看当前时间附近的字幕，再检索整段视频。",
+    );
+    elements.explanationBody.replaceChildren(status, hint);
+    showExplanationCard();
+  }
+
+  function renderEvidenceButtons(evidence) {
+    const items = Array.isArray(evidence) ? evidence : [];
+    if (!items.length) return null;
+    const group = makeElement("div", "yvpm-explanation-evidence");
+    for (const item of items) {
+      const button = makeElement(
+        "button",
+        "yvpm-explanation-evidence-button",
+        `▶ 查看依据 · ${item.label}`,
+      );
+      button.type = "button";
+      button.addEventListener("click", async () => {
+        try {
+          const response = await tabMessage({ type: "SEEK", t: item.t });
+          if (!response?.ok) {
+            throw new Error(response?.error || "视频跳转失败");
+          }
+        } catch (error) {
+          showToast(error?.message || "视频跳转失败");
+        }
+      });
+      group.append(button);
+    }
+    return group;
+  }
+
+  function mergeExplanationEvidence(current, next) {
+    const seen = new Set();
+    return [...(current || []), ...(next || [])]
+      .filter((item) => {
+        if (!Number.isFinite(Number(item?.t)) || seen.has(Number(item.t))) {
+          return false;
+        }
+        seen.add(Number(item.t));
+        return true;
+      })
+      .slice(0, 3);
+  }
+
+  function renderExplanationCard({ busy = false } = {}) {
+    const result = state.explanationResult;
+    if (!result) return;
+    elements.explanationTitle.textContent = state.explanationSelection.text;
+    const fragment = document.createDocumentFragment();
+
+    if (result.simple) {
+      const block = makeElement("section", "yvpm-explanation-block");
+      block.append(
+        makeElement("span", "yvpm-explanation-block-label", "简单说"),
+        makeElement("p", "", result.simple),
+      );
+      fragment.append(block);
+    }
+
+    if (result.inVideo) {
+      const block = makeElement(
+        "section",
+        "yvpm-explanation-block yvpm-explanation-video-block",
+      );
+      block.append(
+        makeElement(
+          "span",
+          "yvpm-explanation-block-label yvpm-explanation-video-label",
+          "在这段视频里",
+        ),
+        makeElement("p", "", result.inVideo),
+      );
+      const evidence = renderEvidenceButtons(result.evidence);
+      if (evidence) block.append(evidence);
+      fragment.append(block);
+    }
+
+    if (result.uncertain || result.notice) {
+      fragment.append(
+        makeElement(
+          "p",
+          "yvpm-explanation-notice",
+          result.notice || "当前字幕不足以确定这个概念的具体含义。",
+        ),
+      );
+    }
+
+    const followupHistory = state.explanationHistory.slice(1);
+    if (followupHistory.length || state.explanationQuestion) {
+      const conversation = makeElement(
+        "div",
+        "yvpm-explanation-conversation",
+      );
+      for (const entry of followupHistory) {
+        conversation.append(
+          makeElement(
+            "p",
+            `yvpm-explanation-message yvpm-explanation-message-${entry.role}`,
+            entry.content,
+          ),
+        );
+      }
+      if (busy && state.explanationQuestion) {
+        conversation.append(
+          makeElement(
+            "p",
+            "yvpm-explanation-message yvpm-explanation-message-user",
+            state.explanationQuestion,
+          ),
+        );
+        const pending = makeElement(
+          "p",
+          "yvpm-explanation-message yvpm-explanation-message-assistant yvpm-explanation-message-pending",
+        );
+        const spinner = makeElement("span", "yvpm-spinner");
+        spinner.setAttribute("aria-hidden", "true");
+        pending.append(spinner, document.createTextNode("正在回答…"));
+        conversation.append(pending);
+      }
+      fragment.append(conversation);
+    }
+
+    if (
+      state.explanationTurns < MAX_EXPLANATION_TURNS &&
+      result.suggestedQuestions?.length
+    ) {
+      const suggestions = makeElement(
+        "div",
+        "yvpm-explanation-suggestions",
+      );
+      for (const question of result.suggestedQuestions) {
+        const button = makeElement("button", "", question);
+        button.type = "button";
+        button.disabled = busy;
+        button.addEventListener("click", () => askExplanation(question));
+        suggestions.append(button);
+      }
+      fragment.append(suggestions);
+    }
+
+    if (state.explanationTurns < MAX_EXPLANATION_TURNS) {
+      const form = makeElement("form", "yvpm-explanation-form");
+      const input = makeElement("input");
+      input.type = "text";
+      input.maxLength = MAX_EXPLANATION_SELECTION_CHARS;
+      input.placeholder = "继续问这个概念…";
+      input.setAttribute("aria-label", "继续追问");
+      input.disabled = busy;
+      const submit = makeElement("button", "", "↑");
+      submit.type = "submit";
+      submit.disabled = busy;
+      submit.setAttribute("aria-label", "发送问题");
+      form.append(input, submit);
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        askExplanation(input.value);
+      });
+      fragment.append(form);
+    } else {
+      fragment.append(
+        makeElement(
+          "p",
+          "yvpm-explanation-turn-limit",
+          "这次解释已完成 3 轮追问。重新圈选内容可以开始新的解释。",
+        ),
+      );
+    }
+
+    fragment.append(
+      makeElement(
+        "p",
+        "yvpm-explanation-grounding",
+        "解释基于完整字幕；通用定义由 AI 补充，视频观点已单独标注",
+      ),
+    );
+    elements.explanationBody.replaceChildren(fragment);
+    showExplanationCard();
+  }
+
+  function renderExplanationError(message, retry) {
+    const error = makeElement(
+      "p",
+      "yvpm-explanation-error",
+      message || "解释失败，请重试",
+    );
+    const button = makeElement("button", "", "重试");
+    button.type = "button";
+    button.addEventListener("click", retry);
+    elements.explanationBody.replaceChildren(error, button);
+    showExplanationCard();
+  }
+
+  function explanationRequestPayload(captions, question = "") {
+    return {
+      clientId: state.explanationClientId,
+      videoId: state.videoId,
+      targetLanguage: state.targetLanguage,
+      sourceLang: captions.sourceLang || "",
+      selectedText: state.explanationSelection.text,
+      anchorT: state.explanationSelection.anchorT,
+      anchorContext: state.explanationSelection.anchorContext,
+      videoOutline: explanationOutline(),
+      segments: captions.segments,
+      history: state.explanationHistory,
+      question,
+    };
+  }
+
+  async function runInitialExplanation() {
+    const selection = state.explanationSelection;
+    if (!selection || selection.videoId !== state.videoId) {
+      hideExplainMenu();
+      return;
+    }
+    hideExplainMenu();
+    highlightExplanationRange();
+    state.explanationHistory = [];
+    state.explanationTurns = 0;
+    state.explanationResult = null;
+    state.explanationQuestion = "";
+    const requestId = ++state.explanationRequestId;
+    const videoId = state.videoId;
+    renderExplanationLoading();
+    try {
+      const captions = await getExplanationCaptions(videoId);
+      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
+        return;
+      }
+      const response = await runtimeMessage({
+        type: "EXPLAIN_VIDEO_SELECTION",
+        payload: explanationRequestPayload(captions),
+      });
+      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
+        return;
+      }
+      if (!response?.ok) {
+        throw new Error(response?.error || "解释失败，请重试");
+      }
+      state.explanationResult = {
+        simple: response.simple,
+        inVideo: response.inVideo,
+        evidence: response.evidence || [],
+        suggestedQuestions: response.suggestedQuestions || [],
+        uncertain: response.uncertain,
+        notice: response.notice,
+      };
+      state.explanationHistory = [
+        {
+          role: "assistant",
+          content: [response.simple, response.inVideo]
+            .filter(Boolean)
+            .join("\n"),
+        },
+      ];
+      renderExplanationCard();
+    } catch (error) {
+      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
+        return;
+      }
+      if (error?.message === "解释已取消") return;
+      renderExplanationError(error?.message, runInitialExplanation);
+    }
+  }
+
+  async function askExplanation(rawQuestion) {
+    const question = String(rawQuestion || "").replace(/\s+/g, " ").trim();
+    if (!question || !state.explanationResult) return;
+    if ([...question].length > MAX_EXPLANATION_SELECTION_CHARS) {
+      showToast("问题控制在 200 个字以内会更准确");
+      return;
+    }
+    if (state.explanationTurns >= MAX_EXPLANATION_TURNS) return;
+    const requestId = ++state.explanationRequestId;
+    const videoId = state.videoId;
+    state.explanationQuestion = question;
+    renderExplanationCard({ busy: true });
+    try {
+      const captions = await getExplanationCaptions(videoId);
+      if (
+        requestId !== state.explanationRequestId ||
+        videoId !== state.videoId ||
+        elements.explanationCard.hidden
+      ) {
+        return;
+      }
+      const response = await runtimeMessage({
+        type: "EXPLAIN_VIDEO_SELECTION",
+        payload: explanationRequestPayload(captions, question),
+      });
+      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
+        return;
+      }
+      if (!response?.ok) {
+        throw new Error(response?.error || "回答失败，请重试");
+      }
+      state.explanationHistory.push(
+        { role: "user", content: question },
+        { role: "assistant", content: response.answer },
+      );
+      state.explanationTurns += 1;
+      state.explanationResult.evidence = mergeExplanationEvidence(
+        state.explanationResult.evidence,
+        response.evidence,
+      );
+      state.explanationResult.suggestedQuestions =
+        response.suggestedQuestions || [];
+      if (response.uncertain || response.notice) {
+        state.explanationResult.uncertain = true;
+        state.explanationResult.notice =
+          response.notice || state.explanationResult.notice;
+      }
+      state.explanationQuestion = "";
+      renderExplanationCard();
+    } catch (error) {
+      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
+        return;
+      }
+      state.explanationQuestion = "";
+      renderExplanationCard();
+      if (error?.message !== "解释已取消") {
+        showToast(error?.message || "回答失败，请重试");
+      }
+    }
+  }
+
+  async function copyExplanationSelection() {
+    const text = state.explanationSelection?.text;
+    if (!text) return;
+    try {
+      await navigator.clipboard.writeText(text);
+      showToast("已复制所选内容");
+    } catch {
+      showToast("复制失败，请使用系统复制快捷键");
+    } finally {
+      hideExplainMenu();
+    }
   }
 
   function stopPrepareCountdown() {
@@ -759,9 +1454,10 @@
     row.dataset.t = String(point.t);
     row.setAttribute("role", "listitem");
 
-    const toggle = document.createElement("button");
-    toggle.type = "button";
+    const toggle = document.createElement("div");
     toggle.className = "yvpm-point-toggle";
+    toggle.setAttribute("role", "button");
+    toggle.tabIndex = 0;
     toggle.setAttribute("aria-expanded", "false");
 
     const time = document.createElement("span");
@@ -782,13 +1478,23 @@
       renderPlainDetail(detail, point);
     }
 
-    toggle.addEventListener("click", () => {
+    const toggleDetail = () => {
+      const selection = window.getSelection();
+      if (selection && !selection.isCollapsed && selection.toString().trim()) {
+        return;
+      }
       const expanding = detail.hidden;
       collapseExpandedRow(row);
       detail.hidden = !expanding;
       row.classList.toggle("yvpm-expanded", expanding);
       toggle.setAttribute("aria-expanded", String(expanding));
       state.expandedRow = expanding ? row : null;
+    };
+    toggle.addEventListener("click", toggleDetail);
+    toggle.addEventListener("keydown", (event) => {
+      if (event.key !== "Enter" && event.key !== " ") return;
+      event.preventDefault();
+      toggleDetail();
     });
 
     row.append(toggle, detail);
@@ -984,6 +1690,13 @@
   }
 
   function clearPoints({ preserveOverview = false } = {}) {
+    if (
+      !elements.explanationCard.hidden ||
+      !elements.explainMenu.hidden ||
+      state.explanationSelection
+    ) {
+      closeExplanation();
+    }
     clearRecommendation({ restoreSections: false, clearInput: true });
     state.defaultRecommendationRequestId += 1;
     state.defaultRecommendations = [];
@@ -1025,6 +1738,7 @@
       updateNowPlaying({ follow: false });
       return;
     }
+    resetExplanationContext();
     state.epoch += 1;
     state.videoId = videoId || "";
     state.loaded = false;
@@ -1506,6 +2220,12 @@
   elements.matchNext.addEventListener("click", () => {
     focusRecommendation(state.recommendationIndex + 1);
   });
+  elements.explainMenu.addEventListener("mousedown", (event) => {
+    event.preventDefault();
+  });
+  elements.explainSelection.addEventListener("click", runInitialExplanation);
+  elements.copySelection.addEventListener("click", copyExplanationSelection);
+  elements.explanationClose.addEventListener("click", () => closeExplanation());
 
   elements.languageButton.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -1520,6 +2240,16 @@
     if (state.pendingCaptions) generateFromCaptions(state.pendingCaptions);
   });
   elements.overviewRetry.addEventListener("click", retryOverview);
+  elements.textScale.addEventListener("input", () => {
+    state.textScaleTouched = true;
+    applyTextScale(elements.textScale.value);
+  });
+  elements.textScale.addEventListener("change", () => {
+    void saveTextScale(elements.textScale.value);
+  });
+  elements.textScaleReset.addEventListener("click", () => {
+    void saveTextScale(TEXT_SCALE_DEFAULT);
+  });
   for (const option of elements.languageOptions) {
     option.addEventListener("click", async () => {
       const nextSetting = option.dataset.language;
@@ -1559,19 +2289,59 @@
       loadSummary({ immediate: true });
     });
   }
+  let explanationSelectionTimer = null;
+  const queueSelectionCapture = () => {
+    clearTimeout(explanationSelectionTimer);
+    explanationSelectionTimer = setTimeout(captureExplainableSelection, 120);
+  };
+  document.addEventListener("selectionchange", queueSelectionCapture);
+  document.addEventListener("pointerup", queueSelectionCapture);
+  document.addEventListener("keyup", (event) => {
+    if (
+      event.shiftKey ||
+      ["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)
+    ) {
+      queueSelectionCapture();
+    }
+  });
+  window.addEventListener(
+    "scroll",
+    () => {
+      if (!elements.explainMenu.hidden) positionExplainMenu();
+      if (!elements.explanationCard.hidden) positionExplanationCard();
+    },
+    { passive: true },
+  );
+  window.addEventListener("resize", () => {
+    if (!elements.explainMenu.hidden) positionExplainMenu();
+    if (!elements.explanationCard.hidden) positionExplanationCard();
+  });
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".yvpm-language-control")) {
       toggleLanguageMenu(false);
     }
+    if (
+      !event.target.closest("#yvpm-explain-menu") &&
+      window.getSelection()?.isCollapsed
+    ) {
+      hideExplainMenu();
+    }
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape") {
+      const languageWasOpen = !elements.languageMenu.hidden;
       toggleLanguageMenu(false);
-      elements.languageButton.focus();
+      if (!elements.explanationCard.hidden) {
+        closeExplanation();
+      } else {
+        hideExplainMenu();
+      }
+      if (languageWasOpen) elements.languageButton.focus();
     }
   });
 
   (async () => {
+    applyTextScale(TEXT_SCALE_DEFAULT);
     try {
       const saved = await chrome.storage.local.get(LANGUAGE_SETTING_KEY);
       if (LANGUAGE_OPTIONS[saved?.[LANGUAGE_SETTING_KEY]]) {
@@ -1579,6 +2349,14 @@
       }
     } catch {
       // 设置读取失败时使用 Chrome 当前语言，不阻塞摘要功能。
+    }
+    try {
+      const saved = await chrome.storage.local.get(TEXT_SCALE_SETTING_KEY);
+      if (!state.textScaleTouched) {
+        applyTextScale(saved?.[TEXT_SCALE_SETTING_KEY]);
+      }
+    } catch {
+      // 文字设置读取失败时使用 100%，不阻塞 Side Panel。
     }
     updateLanguageControl();
     useActiveTab();
