@@ -1,0 +1,11 @@
+# 不要提交/上传这些
+config.local.js
+.env
+node_modules/
+*.log
+.DS_Store
+config.local.js
+.DS_Store
+node_modules/
+dist/
+*.zip

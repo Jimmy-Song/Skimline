@@ -1,0 +1,105 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skimline</title>
+    <link rel="stylesheet" href="sidepanel.css" />
+  </head>
+  <body>
+    <header class="yvpm-appbar">
+      <div class="yvpm-brand" aria-label="Skimline">
+        <span class="yvpm-brand-mark" aria-hidden="true">≋</span>
+        <span>Skimline</span>
+      </div>
+      <div class="yvpm-language-control">
+        <button
+          id="yvpm-language-button"
+          class="yvpm-language-button"
+          type="button"
+          aria-haspopup="listbox"
+          aria-expanded="false"
+        >
+          <span id="yvpm-language-label">简体中文</span>
+          <span aria-hidden="true">⌄</span>
+        </button>
+        <div
+          id="yvpm-language-menu"
+          class="yvpm-language-menu"
+          role="listbox"
+          aria-label="摘要语言"
+          hidden
+        >
+          <button type="button" role="option" data-language="auto">自动（跟随 Chrome）</button>
+          <button type="button" role="option" data-language="zh-CN">简体中文</button>
+          <button type="button" role="option" data-language="zh-TW">繁體中文</button>
+          <button type="button" role="option" data-language="en">English</button>
+          <button type="button" role="option" data-language="ja">日本語</button>
+          <button type="button" role="option" data-language="ko">한국어</button>
+          <button type="button" role="option" data-language="es">Español</button>
+        </div>
+      </div>
+    </header>
+    <main id="yvpm-panel" aria-label="Skimline 视频提纲">
+      <section id="yvpm-prepare" class="yvpm-prepare" hidden>
+        <div class="yvpm-prepare-card">
+          <span class="yvpm-prepare-label">准备生成摘要</span>
+          <h2>选择这次的摘要语言</h2>
+          <p id="yvpm-prepare-copy">摘要将使用右上角选择的语言呈现。</p>
+          <div class="yvpm-prepare-actions">
+            <span class="yvpm-countdown"><strong id="yvpm-countdown">6</strong> 秒后自动开始</span>
+            <button id="yvpm-generate-now" type="button">立即生成</button>
+          </div>
+        </div>
+        <p class="yvpm-privacy-note">摘要内容会发送至你配置的模型服务。同一视频的不同语言版本会分别保存在本地。</p>
+      </section>
+      <div id="yvpm-generation-bar" class="yvpm-generation-bar" hidden>
+        <span><span class="yvpm-spinner" aria-hidden="true"></span><span id="yvpm-generation-copy">正在生成简体中文摘要…</span></span>
+        <button id="yvpm-change-language" type="button">更改语言</button>
+      </div>
+      <div id="yvpm-empty" class="yvpm-empty" hidden>
+        打开一个 YouTube 视频即可生成观点地图
+      </div>
+      <section id="yvpm-overview" class="yvpm-overview" aria-live="polite" hidden>
+        <span class="yvpm-overview-label">概览</span>
+        <p id="yvpm-overview-text"></p>
+        <button id="yvpm-overview-retry" type="button" hidden>重试概览</button>
+      </section>
+      <section id="yvpm-intent" class="yvpm-intent" hidden>
+        <h2>你想从这期视频中获得什么？</h2>
+        <form id="yvpm-intent-form" class="yvpm-intent-form">
+          <input
+            id="yvpm-intent-input"
+            type="text"
+            maxlength="200"
+            autocomplete="off"
+            aria-label="观看需求"
+            placeholder="例如：我是研究生，想了解他的科研成长路径"
+          />
+          <button id="yvpm-intent-submit" type="submit">帮我找</button>
+        </form>
+        <div id="yvpm-intent-chips" class="yvpm-intent-chips" aria-label="推荐观看需求"></div>
+        <div id="yvpm-intent-feedback" class="yvpm-intent-feedback" hidden aria-live="polite"></div>
+      </section>
+      <div id="yvpm-matchbar" class="yvpm-matchbar" hidden aria-live="polite">
+        <span id="yvpm-matchbar-text"></span>
+        <div class="yvpm-matchbar-actions">
+          <button id="yvpm-match-clear" class="yvpm-match-clear" type="button">清除</button>
+          <button id="yvpm-match-prev" class="yvpm-match-nav" type="button" aria-label="上一个推荐">↑</button>
+          <button id="yvpm-match-next" class="yvpm-match-nav" type="button" aria-label="下一个推荐">↓</button>
+        </div>
+      </div>
+      <div id="yvpm-list" role="list"></div>
+      <div id="yvpm-progress" class="yvpm-progress" hidden aria-live="polite">
+        <span id="yvpm-progress-text"></span>
+        <span class="yvpm-progress-shimmer" aria-hidden="true"></span>
+      </div>
+      <div id="yvpm-status" hidden></div>
+    </main>
+    <div id="yvpm-toast" class="yvpm-toast" role="status" aria-live="polite" hidden>
+      选择新的摘要语言后会重新生成。
+    </div>
+    <script src="ui-utils.js"></script>
+    <script src="sidepanel.js"></script>
+  </body>
+</html>

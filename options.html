@@ -1,0 +1,30 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Skimline 设置</title>
+    <link rel="stylesheet" href="options.css">
+  </head>
+  <body>
+    <main>
+      <h1>Skimline</h1>
+      <p>填入你自己的 DeepSeek API Key。Key 只保存在本机浏览器中。</p>
+      <form id="key-form">
+        <label for="api-key">DeepSeek API Key</label>
+        <input
+          id="api-key"
+          name="api-key"
+          type="password"
+          autocomplete="off"
+          spellcheck="false"
+          placeholder="sk-…"
+          required
+        >
+        <button type="submit">保存</button>
+        <span id="save-status" role="status" aria-live="polite"></span>
+      </form>
+    </main>
+    <script src="options.js"></script>
+  </body>
+</html>

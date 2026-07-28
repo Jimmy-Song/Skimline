@@ -1,0 +1,12 @@
+{
+  "_note": "这是对某个字幕轨道 baseUrl 追加 &fmt=json3 后返回的样本，用于让 Codex 编写并单元测试“解析字幕成带时间戳数组”的逻辑。解析规则：每个 event 的 tStartMs 是开始毫秒，文本 = segs 里所有 utf8 拼接。忽略没有 segs 的空 event。目标产物：[{ tMs, text }]。",
+  "wireMagic": "pb3",
+  "events": [
+    { "tStartMs": 0, "dDurationMs": 5200, "segs": [ { "utf8": "So I think the biggest mistake " }, { "utf8": "that early founders make" } ] },
+    { "tStartMs": 5200, "dDurationMs": 4100, "segs": [ { "utf8": "is scaling the team too fast." } ] },
+    { "tStartMs": 9300, "dDurationMs": 4600, "segs": [ { "utf8": "When I hired twenty people at my first company," } ] },
+    { "tStartMs": 13900, "dDurationMs": 4300, "segs": [ { "utf8": "decisions got slower and the goal got blurry." } ] },
+    { "tStartMs": 18200, "dDurationMs": 300, "segs": [ { "utf8": "\n" } ] },
+    { "tStartMs": 18500, "dDurationMs": 5000, "segs": [ { "utf8": "We ended up missing the window to pivot." } ] }
+  ]
+}
