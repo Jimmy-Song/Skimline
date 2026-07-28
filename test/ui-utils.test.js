@@ -12,6 +12,7 @@ const {
   getVideoId,
   groupPointsBySections,
   mergePointsByTimestamp,
+  normalizeTextScale,
   pointIdentity,
   pointStableKey,
   seekVideo,
@@ -20,11 +21,23 @@ const {
 test("只从 YouTube watch URL 读取 videoId", () => {
   assert.equal(getVideoId("https://www.youtube.com/watch?v=abc123&t=20"), "abc123");
   assert.equal(getVideoId("https://youtu.be/abc123"), "");
+  assert.equal(getVideoId("https://evilyoutube.com/watch?v=abc123"), "");
   assert.equal(getVideoId("not a url"), "");
 });
 
 test("观点标识兼顾时间和内容", () => {
   assert.equal(pointIdentity({ t: 12, point: "观点" }), "12:观点");
+});
+
+test("文字缩放值取整、限制在 85%–125% 且脏数据回落到 100%", () => {
+  assert.equal(normalizeTextScale(112.6), 113);
+  assert.equal(normalizeTextScale("85"), 85);
+  assert.equal(normalizeTextScale(20), 85);
+  assert.equal(normalizeTextScale(999), 125);
+  assert.equal(normalizeTextScale("invalid"), 100);
+  assert.equal(normalizeTextScale(""), 100);
+  assert.equal(normalizeTextScale(null), 100);
+  assert.equal(normalizeTextScale(undefined), 100);
 });
 
 test("已有缓存同秒重复观点在渲染前被清理", () => {
@@ -140,9 +153,9 @@ test("样式包含规范指定的明暗色、尺寸和上下布局", () => {
     "#ece9e3",
     "#e1a64b",
     "border-radius: 14px",
-    "font: 11px",
-    "font: 400 13px/1.5",
-    "font: 12.5px/1.8",
+    "font: 0.6875rem",
+    "font: 400 0.8125rem/1.5",
+    "font: 0.78125rem/1.8",
   ]) {
     assert.ok(css.includes(expected), `缺少视觉规范：${expected}`);
   }
@@ -193,7 +206,7 @@ test("概览与分区满足克制的三层视觉和吸顶约束", () => {
   );
   assert.match(
     css,
-    /\.yvpm-section-title\s*\{[\s\S]*?color: var\(--text-primary\);[\s\S]*?font: 500 13px/,
+    /\.yvpm-section-title\s*\{[\s\S]*?color: var\(--text-primary\);[\s\S]*?font: 500 0\.8125rem/,
   );
   assert.doesNotMatch(
     css.match(/\.yvpm-section-title\s*\{[\s\S]*?\}/)?.[0] || "",
@@ -226,7 +239,7 @@ test("A 分区标题使用中性灰底章节带且不含暖色", () => {
       .map((match) => match[0])
       .find((rule) => rule.includes("flex: none")) || "";
   assert.match(rangeRule, /color: var\(--text-muted\)/);
-  assert.match(rangeRule, /font: 10px\/1\.45 var\(--font-time\)/);
+  assert.match(rangeRule, /font: 0\.625rem\/1\.45 var\(--font-time\)/);
   assert.doesNotMatch(rangeRule, /accent-warm/);
 
   const currentRule =

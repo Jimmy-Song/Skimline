@@ -5,10 +5,12 @@ importScripts("generation-utils.js");
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const MAX_CONCURRENT_GENERATIONS = 2;
 const TASK_TTL_MS = 24 * 60 * 60 * 1000;
+const CONTENT_MESSAGE_SOURCE = "youtube-viewpoint-map";
 const activeGenerations = new Map();
 const taskRecords = new Map();
 const queuedTaskKeys = [];
 const overviewJobs = new Map();
+const explanationControllers = new Map();
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
@@ -624,7 +626,222 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   })().catch(() => {});
 });
 
+function readPlayerCaptionTracksInMainWorld(requestedVideoId) {
+  const getVideoId = () => {
+    try {
+      const parsed = new URL(location.href);
+      const hostname = parsed.hostname.toLowerCase();
+      return (hostname === "youtube.com" ||
+        hostname.endsWith(".youtube.com")) &&
+        parsed.pathname === "/watch"
+        ? parsed.searchParams.get("v") || ""
+        : "";
+    } catch {
+      return "";
+    }
+  };
+  const parseResponse = (value) => {
+    if (typeof value !== "string") return value;
+    try {
+      return JSON.parse(value);
+    } catch {
+      return null;
+    }
+  };
+  const currentResponse = () => {
+    const candidates = [];
+    try {
+      candidates.push(
+        document.getElementById("movie_player")?.getPlayerResponse?.(),
+      );
+    } catch {
+      // 播放器实验可能暂时不暴露方法，继续尝试其他官方响应入口。
+    }
+    candidates.push(
+      globalThis.ytplayer?.config?.args?.player_response,
+      globalThis.ytInitialPlayerResponse,
+    );
+    for (const candidate of candidates) {
+      const response = parseResponse(candidate);
+      if (response?.videoDetails?.videoId === requestedVideoId) return response;
+    }
+    return null;
+  };
+  const sanitizeTrack = (track) => {
+    try {
+      if (!track || typeof track !== "object") return null;
+      const baseUrl = new URL(String(track.baseUrl || ""));
+      const hostname = baseUrl.hostname.toLowerCase();
+      if (
+        baseUrl.protocol !== "https:" ||
+        (hostname !== "youtube.com" && !hostname.endsWith(".youtube.com"))
+      ) {
+        return null;
+      }
+      const languageCode = String(track.languageCode || "").slice(0, 64);
+      if (!languageCode) return null;
+      const name = String(
+        track.name?.simpleText ||
+          (Array.isArray(track.name?.runs)
+            ? track.name.runs.map((run) => run?.text || "").join("")
+            : "") ||
+          "",
+      ).slice(0, 200);
+      return {
+        baseUrl: baseUrl.toString(),
+        languageCode,
+        kind: String(track.kind || "").slice(0, 32),
+        name: { simpleText: name },
+        vssId: String(track.vssId || "").slice(0, 128),
+      };
+    } catch {
+      return null;
+    }
+  };
+
+  return new Promise((resolve) => {
+    const startedAt = Date.now();
+    const check = () => {
+      try {
+        const currentVideoId = getVideoId();
+        if (currentVideoId !== requestedVideoId) {
+          resolve({
+            status: "video_changed",
+            videoId: currentVideoId,
+            matchedVideo: false,
+            tracks: [],
+            rawTrackCount: 0,
+            sourceLang: "",
+          });
+          return;
+        }
+        const response = currentResponse();
+        if (response) {
+          const renderer =
+            response?.captions?.playerCaptionsTracklistRenderer || null;
+          const rawTracks = Array.isArray(renderer?.captionTracks)
+            ? renderer.captionTracks.slice(0, 100)
+            : [];
+          const tracks = rawTracks.map(sanitizeTrack).filter(Boolean);
+          const sourceLang =
+            response?.videoDetails?.defaultAudioLanguage ||
+            response?.microformat?.playerMicroformatRenderer?.audioLanguage ||
+            renderer?.audioTracks?.[
+              renderer.defaultAudioTrackIndex || 0
+            ]?.audioTrackId?.split(".")[0] ||
+            "";
+          resolve({
+            status: "ok",
+            videoId: requestedVideoId,
+            matchedVideo: true,
+            tracks,
+            rawTrackCount: rawTracks.length,
+            sourceLang: String(sourceLang).slice(0, 64),
+          });
+          return;
+        }
+        if (Date.now() - startedAt >= 5000) {
+          resolve({
+            status: "player_unavailable",
+            videoId: requestedVideoId,
+            matchedVideo: false,
+            tracks: [],
+            rawTrackCount: 0,
+            sourceLang: "",
+          });
+          return;
+        }
+        setTimeout(check, 100);
+      } catch {
+        resolve({
+          status: "player_error",
+          videoId: requestedVideoId,
+          matchedVideo: false,
+          tracks: [],
+          rawTrackCount: 0,
+          sourceLang: "",
+        });
+      }
+    };
+    check();
+  });
+}
+
+async function readPlayerCaptionTracks(message, sender) {
+  const requestedVideoId = String(message?.videoId || "").trim();
+  const tabId = sender?.tab?.id;
+  if (
+    message?.source !== CONTENT_MESSAGE_SOURCE ||
+    !requestedVideoId ||
+    !Number.isInteger(tabId) ||
+    sender?.frameId !== 0
+  ) {
+    throw new Error("字幕请求来源无效，请刷新 YouTube 页面后重试");
+  }
+
+  let senderUrl;
+  try {
+    senderUrl = new URL(String(sender.url || sender.tab?.url || ""));
+  } catch {
+    throw new Error("无法确认当前 YouTube 视频页面");
+  }
+  const senderHostname = senderUrl.hostname.toLowerCase();
+  if (
+    (senderHostname !== "youtube.com" &&
+      !senderHostname.endsWith(".youtube.com")) ||
+    senderUrl.pathname !== "/watch" ||
+    senderUrl.searchParams.get("v") !== requestedVideoId
+  ) {
+    throw new Error("视频已切换，已取消旧字幕请求");
+  }
+
+  const results = await chrome.scripting.executeScript({
+    target: { tabId, frameIds: [0] },
+    world: "MAIN",
+    func: readPlayerCaptionTracksInMainWorld,
+    args: [requestedVideoId],
+  });
+  const result = results?.find((entry) => entry.frameId === 0)?.result;
+  if (
+    !result ||
+    result.status === "player_unavailable" ||
+    result.status === "player_error"
+  ) {
+    throw new Error("未能读取当前视频的播放器数据，请刷新页面后重试");
+  }
+  if (
+    result.status === "video_changed" ||
+    result.videoId !== requestedVideoId
+  ) {
+    throw new Error("视频已切换，已取消旧字幕请求");
+  }
+  if (!result.matchedVideo) {
+    throw new Error("播放器返回了不匹配的视频数据，请刷新页面后重试");
+  }
+  if (result.rawTrackCount > 0 && !result.tracks?.length) {
+    throw new Error("YouTube 返回了无法验证的字幕轨道，请刷新页面后重试");
+  }
+  return {
+    videoId: requestedVideoId,
+    matchedVideo: true,
+    tracks: Array.isArray(result.tracks) ? result.tracks : [],
+    sourceLang: String(result.sourceLang || ""),
+  };
+}
+
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message?.type === "READ_PLAYER_CAPTION_TRACKS") {
+    readPlayerCaptionTracks(message, sender)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "读取 YouTube 播放器字幕信息失败",
+        }),
+      );
+    return true;
+  }
+
   if (message?.type === "GET_API_KEY_STATUS") {
     chrome.storage.local
       .get("deepseek_api_key")
@@ -737,6 +954,53 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         error: error?.message || "默认推荐生成失败",
       }),
     );
+    return true;
+  }
+
+  if (message?.type === "CANCEL_CONTEXT_EXPLANATION") {
+    const clientId = String(message.clientId || "");
+    explanationControllers.get(clientId)?.abort();
+    explanationControllers.delete(clientId);
+    sendResponse({ ok: true });
+    return false;
+  }
+
+  if (message?.type === "EXPLAIN_VIDEO_SELECTION") {
+    const clientId = String(message.payload?.clientId || "").slice(0, 128);
+    if (!clientId) {
+      sendResponse({ ok: false, error: "解释会话信息无效" });
+      return false;
+    }
+    explanationControllers.get(clientId)?.abort();
+    const controller = new AbortController();
+    explanationControllers.set(clientId, controller);
+    const releaseController = () => {
+      if (explanationControllers.get(clientId) === controller) {
+        explanationControllers.delete(clientId);
+      }
+    };
+    (async () => {
+      const { deepseek_api_key: apiKey } =
+        await chrome.storage.local.get("deepseek_api_key");
+      const result = await YouTubeSummary.explainVideoSelection(
+        message.payload,
+        {
+          apiKey,
+          baseUrl: DEFAULT_BASE_URL,
+          signal: controller.signal,
+        },
+      );
+      releaseController();
+      sendResponse({ ok: true, ...result });
+    })()
+      .catch((error) => {
+        releaseController();
+        sendResponse({
+          ok: false,
+          cancelled: controller.signal.aborted,
+          error: error?.message || "解释失败，请重试",
+        });
+      });
     return true;
   }
 

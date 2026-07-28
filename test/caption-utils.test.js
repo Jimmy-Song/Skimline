@@ -17,8 +17,9 @@ const {
   parseTimestampLabel,
   parseTranscriptEntries,
   parseTranscriptSegment,
-  selectMatchingPlayerResponse,
-} = require("../injected.js");
+  findTranscriptOpenButton,
+  extractTranscriptFallback,
+} = require("../transcript-utils.js");
 
 function fixture(name) {
   return JSON.parse(
@@ -160,26 +161,117 @@ test("页面文稿已可见时可直接从当前 DOM 读取", () => {
   ]);
 });
 
-test("SPA 切换后只接受与当前 URL videoId 一致的 player response", () => {
-  const previous = {
-    videoDetails: { videoId: "previous-video" },
-    captions: { playerCaptionsTracklistRenderer: { captionTracks: [] } },
-  };
-  const current = {
-    videoDetails: { videoId: "current-video" },
-    captions: { playerCaptionsTracklistRenderer: { captionTracks: [] } },
-  };
-
+test("文字记录工具只接受 YouTube watch URL", () => {
   assert.equal(
     getVideoIdFromUrl("https://www.youtube.com/watch?v=current-video&list=WL"),
     "current-video",
   );
+  assert.equal(getVideoIdFromUrl("https://www.youtube.com/shorts/current-video"), "");
+  assert.equal(getVideoIdFromUrl("https://example.com/watch?v=current-video"), "");
   assert.equal(
-    selectMatchingPlayerResponse([previous, current], "current-video"),
-    current,
+    getVideoIdFromUrl("https://evilyoutube.com/watch?v=current-video"),
+    "",
   );
-  assert.equal(
-    selectMatchingPlayerResponse([previous], "current-video"),
-    null,
-  );
+});
+
+test("文字记录入口优先使用可见且可操作的按钮", () => {
+  const hidden = {
+    disabled: false,
+    isConnected: true,
+    textContent: "内容转文字",
+    getAttribute: () => "",
+    getClientRects: () => [],
+  };
+  const visible = {
+    disabled: false,
+    isConnected: true,
+    textContent: "Show transcript",
+    getAttribute: (name) =>
+      name === "aria-label" ? "Show transcript" : "",
+    getClientRects: () => [{ width: 100, height: 20 }],
+  };
+  const disabled = {
+    disabled: true,
+    isConnected: true,
+    textContent: "Show transcript",
+    getAttribute: () => "",
+    getClientRects: () => [{ width: 100, height: 20 }],
+  };
+  const documentRef = {
+    querySelectorAll(selector) {
+      if (selector.startsWith("ytd-video-description")) {
+        return [hidden, disabled];
+      }
+      if (selector.includes("aria-label")) return [visible];
+      return [];
+    },
+  };
+  assert.equal(findTranscriptOpenButton(documentRef), visible);
+});
+
+test("同一视频并发文字记录请求只打开一次原生面板", async () => {
+  let opened = 0;
+  let segmentsReady = false;
+  const panel = {
+    querySelectorAll: () => [],
+    querySelector: () => null,
+  };
+  const segment = {
+    textContent: "0:01 Hello",
+    getClientRects: () => [{ width: 100, height: 20 }],
+    querySelector: () => null,
+    closest: () => panel,
+  };
+  const openButton = {
+    disabled: false,
+    isConnected: true,
+    textContent: "Show transcript",
+    getAttribute: (name) =>
+      name === "aria-label" ? "Show transcript" : "",
+    getClientRects: () => [{ width: 100, height: 20 }],
+    click() {
+      opened += 1;
+      segmentsReady = true;
+    },
+  };
+  const style = {
+    textContent: "",
+    remove() {},
+  };
+  const documentRef = {
+    documentElement: {
+      appendChild() {},
+    },
+    createElement: () => style,
+    querySelector(selector) {
+      if (
+        selector ===
+        "transcript-segment-view-model, ytd-transcript-segment-renderer"
+      ) {
+        return segmentsReady ? segment : null;
+      }
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (
+        selector ===
+        "transcript-segment-view-model, ytd-transcript-segment-renderer"
+      ) {
+        return segmentsReady ? [segment] : [];
+      }
+      if (selector.startsWith("ytd-video-description")) return [openButton];
+      return [];
+    },
+  };
+  const rootRef = {
+    document: documentRef,
+    location: { href: "https://www.youtube.com/watch?v=video-1" },
+    clearTimeout,
+    setTimeout,
+  };
+  const first = extractTranscriptFallback("video-1", rootRef, 100);
+  const second = extractTranscriptFallback("video-1", rootRef, 100);
+  assert.equal(first, second);
+  assert.deepEqual(await first, [{ tMs: 1000, text: "Hello" }]);
+  assert.equal(opened, 1);
 });

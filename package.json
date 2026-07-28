@@ -1,9 +1,10 @@
 {
   "name": "youtube-viewpoint-map",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "description": "Skimline — a scannable, jump-anywhere map for long YouTube videos",
   "scripts": {
+    "build:release": "sh scripts/build-release.sh",
     "test": "node --test test/*.test.js"
   }
 }

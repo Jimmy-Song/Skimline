@@ -9,3 +9,4 @@ config.local.js
 node_modules/
 dist/
 *.zip
+!releases/*.zip
