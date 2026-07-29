@@ -18,6 +18,15 @@
   ];
   const TRANSCRIPT_BUTTON_LABEL =
     /transcript|transkrip|transcri|文字记录|内容转文字|文字稿|逐字稿|文字起こし|스크립트/i;
+  const DESCRIPTION_EXPAND_SELECTORS = [
+    "#description-inline-expander #expand",
+    "#description #expand",
+    "ytd-text-inline-expander #expand",
+    "#description-inline-expander button",
+    "#description button",
+  ];
+  const DESCRIPTION_EXPAND_LABEL =
+    /(?:^|\s)(?:\.\.\.)?(?:show\s+more|more|更多|展开|展開|もっと見る|더보기)(?:\s|$)/i;
   const pendingTranscriptFallbacks = new Map();
 
   function parseTimestampLabel(label) {
@@ -84,12 +93,22 @@
   }
 
   function parseTranscriptDom(documentRef) {
-    const entries = Array.from(
+    const segments = Array.from(
       documentRef.querySelectorAll(TRANSCRIPT_SEGMENT_SELECTOR),
-    )
+    );
+    const leafSegments = segments.filter(
+      (segment) => !segment.querySelector?.(TRANSCRIPT_SEGMENT_SELECTOR),
+    );
+    const entries = (leafSegments.length ? leafSegments : segments)
       .filter(transcriptSegmentIsReadable)
       .map(parseTranscriptSegment);
-    return parseTranscriptEntries(entries);
+    const seen = new Set();
+    return parseTranscriptEntries(entries).filter((entry) => {
+      const key = `${entry.tMs}\n${entry.text}`;
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   function getVideoIdFromUrl(url) {
@@ -167,10 +186,52 @@
       }
     }
     return (
-      candidates.find((button) => button.getClientRects?.().length > 0) ||
-      candidates[0] ||
-      null
+      candidates.find((button) => button.getClientRects?.().length > 0) || null
     );
+  }
+
+  function findDescriptionExpandButton(documentRef) {
+    const seen = new Set();
+    for (const selector of DESCRIPTION_EXPAND_SELECTORS) {
+      for (const button of documentRef.querySelectorAll(selector)) {
+        if (
+          seen.has(button) ||
+          !buttonIsUsable(button) ||
+          button.getClientRects?.().length === 0
+        ) {
+          continue;
+        }
+        seen.add(button);
+        if (
+          selector.endsWith("#expand") ||
+          DESCRIPTION_EXPAND_LABEL.test(buttonLabel(button))
+        ) {
+          return button;
+        }
+      }
+    }
+    return null;
+  }
+
+  function waitForTranscriptOpenButton(
+    documentRef,
+    rootRef = root,
+    timeoutMs = 3000,
+  ) {
+    const existing = findTranscriptOpenButton(documentRef);
+    if (existing) return Promise.resolve(existing);
+    return new Promise((resolve) => {
+      const startedAt = Date.now();
+      const check = () => {
+        const button = findTranscriptOpenButton(documentRef);
+        if (button || Date.now() - startedAt >= timeoutMs) {
+          resolve(button || null);
+          return;
+        }
+        rootRef.setTimeout(check, 50);
+      };
+      check();
+    });
   }
 
   function closeTranscriptPanel(documentRef) {
@@ -217,7 +278,18 @@
       return waitForTranscriptDom(documentRef, rootRef, timeoutMs);
     }
 
-    const openButton = findTranscriptOpenButton(documentRef);
+    let openButton = findTranscriptOpenButton(documentRef);
+    if (!openButton) {
+      const expandButton = findDescriptionExpandButton(documentRef);
+      if (expandButton) {
+        expandButton.click();
+        openButton = await waitForTranscriptOpenButton(
+          documentRef,
+          rootRef,
+          Math.min(3000, timeoutMs),
+        );
+      }
+    }
     if (!openButton) throw new Error("当前视频没有可读取的文字记录");
 
     const hidingStyle = documentRef.createElement("style");
@@ -265,6 +337,7 @@
 
   const api = {
     extractTranscriptFallback,
+    findDescriptionExpandButton,
     findTranscriptOpenButton,
     getVideoIdFromUrl,
     parseTimestampLabel,

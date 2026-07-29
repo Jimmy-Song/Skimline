@@ -14,6 +14,7 @@
     <header class="yvpm-appbar">
       <div class="yvpm-brand" aria-label="Skimline"><span class="yvpm-brand-mark" aria-hidden="true">≋</span><span class="yvpm-brand-name">Skimline</span></div>
       <div class="yvpm-app-controls">
+        <button id="yvpm-library-button" class="yvpm-library-button" type="button" aria-label="打开洞见库" aria-pressed="false"><span class="yvpm-library-icon" aria-hidden="true"></span><span id="yvpm-library-count" class="yvpm-library-count" hidden>0</span></button>
         <div class="yvpm-text-scale-control" role="group" aria-label="文字大小">
           <span class="yvpm-text-scale-small" aria-hidden="true">A</span>
           <input id="yvpm-text-scale" type="range" min="85" max="125" step="1" value="100" aria-label="调整整个侧栏的文字大小" aria-valuetext="100%，标准">
@@ -77,18 +78,41 @@
       </div>
       <div id="yvpm-status" hidden></div>
     </main>
+    <section id="yvpm-library" class="yvpm-library" aria-label="洞见库" hidden>
+      <header class="yvpm-library-header">
+        <button id="yvpm-library-back" class="yvpm-library-back" type="button"><span aria-hidden="true">‹</span> 返回</button>
+        <div><h2>洞见库</h2><p id="yvpm-library-total">0 条收藏</p></div>
+      </header>
+      <div class="yvpm-library-search-wrap">
+        <span class="yvpm-library-search-icon" aria-hidden="true"></span>
+        <input id="yvpm-library-search" type="search" aria-label="搜索收藏内容或视频标题" placeholder="搜索收藏内容或视频标题">
+        <button id="yvpm-library-search-clear" class="yvpm-library-search-clear" type="button" aria-label="清除搜索" hidden>×</button>
+      </div>
+      <div id="yvpm-library-list" class="yvpm-library-list" role="list"></div>
+      <div id="yvpm-library-empty" class="yvpm-library-empty" hidden>
+        <span class="yvpm-library-empty-mark" aria-hidden="true">◇</span>
+        <h2 id="yvpm-library-empty-title">还没有收藏</h2>
+        <p id="yvpm-library-empty-copy">在摘要中圈选一段文字，就可以把它留在这里。</p>
+      </div>
+    </section>
     <div id="yvpm-explain-menu" class="yvpm-explain-menu" role="menu" aria-label="所选文字操作" hidden>
-      <button id="yvpm-explain-selection" class="yvpm-explain-menu-primary" type="button" role="menuitem"><span aria-hidden="true">✦</span>解释这段</button>
+      <button id="yvpm-save-selection" class="yvpm-explain-menu-primary" type="button" role="menuitem"><span aria-hidden="true">◇</span>收藏</button>
+      <button id="yvpm-explain-selection" type="button" role="menuitem"><span aria-hidden="true">✦</span>解释</button>
       <button id="yvpm-copy-selection" type="button" role="menuitem">复制</button>
     </div>
-    <article id="yvpm-explanation-card" class="yvpm-explanation-card" role="dialog" aria-modal="false" aria-labelledby="yvpm-explanation-title" hidden>
+    <div id="yvpm-explanation-scrim" class="yvpm-explanation-scrim" aria-hidden="true" data-state="closed" hidden></div>
+    <article id="yvpm-explanation-drawer" class="yvpm-explanation-drawer" role="dialog" aria-modal="true" aria-labelledby="yvpm-explanation-title" aria-hidden="true" data-state="closed" inert hidden>
+      <div class="yvpm-explanation-grabber" aria-hidden="true"></div>
       <header class="yvpm-explanation-header">
         <div><span class="yvpm-explanation-label">AI 上下文解释</span><h2 id="yvpm-explanation-title"></h2></div>
-        <button id="yvpm-explanation-close" class="yvpm-explanation-close" type="button" aria-label="关闭解释">×</button>
+        <button id="yvpm-explanation-close" class="yvpm-explanation-close" type="button">收起 <span aria-hidden="true">↓</span></button>
       </header>
-      <div id="yvpm-explanation-body" class="yvpm-explanation-body" aria-live="polite"></div>
+      <div id="yvpm-explanation-body" class="yvpm-explanation-body" aria-live="polite" data-explanation-scroll></div>
+      <button id="yvpm-explanation-latest" class="yvpm-explanation-latest" type="button" hidden>↓ 回到最新回答</button>
+      <footer id="yvpm-explanation-composer" class="yvpm-explanation-composer"></footer>
     </article>
-    <div id="yvpm-toast" class="yvpm-toast" role="status" aria-live="polite" hidden>选择新的摘要语言后会重新生成。</div>
+    <div id="yvpm-toast" class="yvpm-toast" role="status" aria-live="polite" hidden><span id="yvpm-toast-message">选择新的摘要语言后会重新生成。</span><button id="yvpm-toast-action" type="button" hidden></button></div>
+    <script src="../collection-utils.js"></script>
     <script src="../ui-utils.js"></script>
     <script>
       const streamMode = new URLSearchParams(location.search).has("stream");
@@ -96,6 +120,7 @@
       const followupMode = new URLSearchParams(location.search).has("followup");
       if (streamMode) document.body.classList.add("stream-mode");
       const runtimeListeners = [];
+      let fixtureExplanationTask = null;
       const fixtureSummary = {
         videoId: "fixture-video",
         overview: "这期讨论小团队如何避免过早扩张，并用清晰目标把握短暂的转型窗口。",
@@ -191,6 +216,7 @@
       }
       globalThis.chrome = {
         storage: {
+          onChanged: { addListener() {} },
           local: {
             async get(key) {
               return {
@@ -264,20 +290,84 @@
               });
             } else if (message.type === "MATCH_SUMMARY_INTENT") {
               callback({ ok: true, pointTs: [10, 3700], cached: false });
-            } else if (message.type === "EXPLAIN_VIDEO_SELECTION") {
-              const followup = Boolean(message.payload.question);
+            } else if (message.type === "GET_CONTEXT_EXPLANATION_TASK") {
+              callback({ ok: true, task: fixtureExplanationTask });
+            } else if (message.type === "START_CONTEXT_EXPLANATION") {
+              const payload = message.payload;
+              fixtureExplanationTask = {
+                taskId: "fixture-explanation",
+                status: "complete",
+                videoId: payload.videoId,
+                targetLanguage: payload.targetLanguage,
+                sourceLang: payload.sourceLang,
+                selection: {
+                  selectedText: payload.selectedText,
+                  videoId: payload.videoId,
+                  videoTitle: payload.videoTitle,
+                  anchorT: payload.anchorT,
+                  anchorContext: payload.anchorContext,
+                  sourceType: payload.sourceType,
+                  pointText: payload.pointText,
+                  sectionTitle: payload.sectionTitle
+                },
+                result: {
+                  simple: "它指市场变化中适合团队调整方向、但不会持续太久的一段时期。",
+                  inVideo: "讲者用它说明：团队决策链越长，越可能在达成内部共识前错过改变方向的时机。",
+                  answer: "",
+                  evidence: [{ t: 3700, label: "1:01:40" }],
+                  suggestedQuestions: ["用生活中的例子说明", "它为什么会变短？"],
+                  uncertain: false,
+                  notice: ""
+                },
+                history: [{ role: "assistant", content: "首轮解释" }],
+                turns: 0,
+                pendingQuestion: "",
+                dismissed: false
+              };
+              callback({ ok: true, task: fixtureExplanationTask });
+            } else if (message.type === "ASK_CONTEXT_EXPLANATION") {
+              const question = message.payload.question;
+              fixtureExplanationTask = {
+                ...fixtureExplanationTask,
+                status: "complete",
+                history: [
+                  ...fixtureExplanationTask.history,
+                  { role: "user", content: question },
+                  {
+                    role: "assistant",
+                    content: "可以把它理解成一班即将关门的地铁：讨论得越久，越容易来不及上车。"
+                  }
+                ],
+                turns: fixtureExplanationTask.turns + 1,
+                pendingQuestion: "",
+                result: {
+                  ...fixtureExplanationTask.result,
+                  suggestedQuestions: []
+                }
+              };
               callback({
                 ok: true,
-                simple: followup ? "" : "它指市场变化中适合团队调整方向、但不会持续太久的一段时期。",
-                inVideo: followup ? "" : "讲者用它说明：团队决策链越长，越可能在达成内部共识前错过改变方向的时机。",
-                answer: followup ? "可以把它理解成一班即将关门的地铁：讨论得越久，越容易来不及上车。" : "",
-                evidence: [{ t: 3700, label: "1:01:40" }],
-                suggestedQuestions: followup ? [] : ["用生活中的例子说明", "它为什么会变短？"],
-                uncertain: false,
-                notice: ""
+                task: fixtureExplanationTask
               });
+            } else if (message.type === "DISMISS_CONTEXT_EXPLANATION") {
+              if (fixtureExplanationTask) fixtureExplanationTask.dismissed = true;
+              callback({ ok: true, task: fixtureExplanationTask });
             } else if (message.type === "CANCEL_CONTEXT_EXPLANATION") {
               callback({ ok: true });
+            } else if (message.type === "LIST_CLIPPINGS") {
+              callback({ ok: true, items: [], revision: 0 });
+            } else if (message.type === "SAVE_CLIPPING") {
+              callback({
+                ok: true,
+                duplicate: false,
+                count: 1,
+                revision: 1,
+                item: {
+                  id: "fixture-clipping",
+                  ...message.payload,
+                  savedAt: Date.now()
+                }
+              });
             } else {
               callback({ ok: true, configured: true });
             }
@@ -285,14 +375,17 @@
         },
         tabs: {
           async query() {
-            return [{ id: 1 }];
+            return [{ id: 1, title: "Fixture Video - YouTube" }];
           },
+          update(_tabId, _update, callback) { callback({ id: 1 }); },
+          create(_create, callback) { callback({ id: 2 }); },
           sendMessage(_tabId, message, callback) {
             if (message.type === "GET_VIDEO_STATE") {
               callback({
                 ok: true,
                 videoId: "fixture-video",
-                currentTime: 20
+                currentTime: 20,
+                videoTitle: "Fixture Video"
               });
             } else if (message.type === "GET_CAPTION_SEGMENTS") {
               callback({
@@ -312,6 +405,7 @@
             }
           },
           onActivated: { addListener() {} },
+          onRemoved: { addListener() {} },
           onUpdated: { addListener() {} }
         }
       };
