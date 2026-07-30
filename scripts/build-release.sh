@@ -18,6 +18,7 @@ for release_file in \
   README.md \
   background.js \
   caption-utils.js \
+  collection-utils.js \
   content.js \
   generation-utils.js \
   manifest.json \
@@ -31,6 +32,16 @@ for release_file in \
   ui-utils.js
 do
   cp "${release_root}/${release_file}" "${release_tmp}/${release_name}/${release_file}"
+done
+
+mkdir -p "${release_tmp}/${release_name}/icons"
+for release_icon in \
+  icon16.png \
+  icon32.png \
+  icon48.png \
+  icon128.png
+do
+  cp "${release_root}/icons/${release_icon}" "${release_tmp}/${release_name}/icons/${release_icon}"
 done
 
 (

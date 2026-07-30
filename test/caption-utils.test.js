@@ -275,3 +275,82 @@ test("同一视频并发文字记录请求只打开一次原生面板", async ()
   assert.deepEqual(await first, [{ tMs: 1000, text: "Hello" }]);
   assert.equal(opened, 1);
 });
+
+test("文字记录入口折叠时先展开视频描述，再打开可见入口", async () => {
+  let descriptionExpanded = false;
+  let segmentsReady = false;
+  let expanded = 0;
+  let opened = 0;
+  const panel = {
+    querySelectorAll: () => [],
+    querySelector: () => null,
+  };
+  const segment = {
+    textContent: "0:02 Expanded transcript",
+    getClientRects: () => [{ width: 100, height: 20 }],
+    querySelector: () => null,
+    closest: () => panel,
+  };
+  const openButton = {
+    disabled: false,
+    isConnected: true,
+    textContent: "内容转文字",
+    getAttribute: (name) => (name === "aria-label" ? "内容转文字" : ""),
+    getClientRects: () =>
+      descriptionExpanded ? [{ width: 100, height: 20 }] : [],
+    click() {
+      opened += 1;
+      segmentsReady = true;
+    },
+  };
+  const expandButton = {
+    disabled: false,
+    isConnected: true,
+    textContent: "...更多",
+    getAttribute: () => "",
+    getClientRects: () => [{ width: 100, height: 20 }],
+    click() {
+      expanded += 1;
+      descriptionExpanded = true;
+    },
+  };
+  const style = { textContent: "", remove() {} };
+  const documentRef = {
+    documentElement: { appendChild() {} },
+    createElement: () => style,
+    querySelector(selector) {
+      if (
+        selector ===
+        "transcript-segment-view-model, ytd-transcript-segment-renderer"
+      ) {
+        return segmentsReady ? segment : null;
+      }
+      return null;
+    },
+    querySelectorAll(selector) {
+      if (
+        selector ===
+        "transcript-segment-view-model, ytd-transcript-segment-renderer"
+      ) {
+        return segmentsReady ? [segment] : [];
+      }
+      if (selector.startsWith("ytd-video-description")) return [openButton];
+      if (selector.includes("aria-label")) return [openButton];
+      if (selector.includes("#expand")) return [expandButton];
+      return [];
+    },
+  };
+  const rootRef = {
+    document: documentRef,
+    location: { href: "https://www.youtube.com/watch?v=video-expanded" },
+    clearTimeout,
+    setTimeout,
+  };
+
+  assert.deepEqual(
+    await extractTranscriptFallback("video-expanded", rootRef, 100),
+    [{ tMs: 2000, text: "Expanded transcript" }],
+  );
+  assert.equal(expanded, 1);
+  assert.equal(opened, 1);
+});

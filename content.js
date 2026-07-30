@@ -6,7 +6,10 @@
     videoId: YouTubeSummary.getVideoId(),
     videoElement: null,
     lastPlaybackSentAt: 0,
+    captionCache: new Map(),
+    captionRequests: new Map(),
   };
+  const MAX_CACHED_CAPTION_VIDEOS = 3;
 
   function notify(message) {
     try {
@@ -67,7 +70,16 @@
     });
   }
 
-  async function getCaptionSegments(requestedVideoId) {
+  function rememberCaptionResult(videoId, result) {
+    if (!result?.supported || !result.segments?.length) return;
+    state.captionCache.delete(videoId);
+    state.captionCache.set(videoId, result);
+    while (state.captionCache.size > MAX_CACHED_CAPTION_VIDEOS) {
+      state.captionCache.delete(state.captionCache.keys().next().value);
+    }
+  }
+
+  async function loadCaptionSegments(requestedVideoId) {
     assertCurrentVideo(requestedVideoId);
     const captionInfo = await requestCaptionTracks(requestedVideoId);
     assertCurrentVideo(requestedVideoId);
@@ -111,22 +123,48 @@
 
     console.info("[Skimline] 带时间戳字幕", segments);
     const video = document.querySelector("video");
-    return {
+    const result = {
       supported: true,
       videoId: requestedVideoId,
       duration: Number.isFinite(video?.duration) ? Math.floor(video.duration) : 0,
       sourceLang: track?.languageCode || captionInfo.sourceLang || "",
       segments,
     };
+    rememberCaptionResult(requestedVideoId, result);
+    return result;
+  }
+
+  async function getCaptionSegments(requestedVideoId) {
+    assertCurrentVideo(requestedVideoId);
+    const cached = state.captionCache.get(requestedVideoId);
+    if (cached) {
+      state.captionCache.delete(requestedVideoId);
+      state.captionCache.set(requestedVideoId, cached);
+      return Promise.resolve(cached);
+    }
+    if (state.captionRequests.has(requestedVideoId)) {
+      return state.captionRequests.get(requestedVideoId);
+    }
+    const pending = loadCaptionSegments(requestedVideoId).finally(() => {
+      if (state.captionRequests.get(requestedVideoId) === pending) {
+        state.captionRequests.delete(requestedVideoId);
+      }
+    });
+    state.captionRequests.set(requestedVideoId, pending);
+    return pending;
   }
 
   function getVideoState() {
     const video = document.querySelector("video");
     const videoId = YouTubeSummary.getVideoId();
+    const videoTitle = String(document.title || "")
+      .replace(/\s*-\s*YouTube\s*$/i, "")
+      .trim();
     return {
       videoId,
       duration: Number.isFinite(video?.duration) ? Math.floor(video.duration) : 0,
       currentTime: Number.isFinite(video?.currentTime) ? video.currentTime : 0,
+      videoTitle,
     };
   }
 
@@ -156,7 +194,10 @@
     const nextVideoId = YouTubeSummary.getVideoId();
     if (nextVideoId !== state.videoId) {
       state.videoId = nextVideoId;
-      notify({ type: "VIDEO_CHANGED", videoId: nextVideoId });
+      const videoTitle = String(document.title || "")
+        .replace(/\s*-\s*YouTube\s*$/i, "")
+        .trim();
+      notify({ type: "VIDEO_CHANGED", videoId: nextVideoId, videoTitle });
     }
     ensureVideoListener();
   }

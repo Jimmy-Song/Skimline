@@ -13,6 +13,16 @@
         <span class="yvpm-brand-name">Skimline</span>
       </div>
       <div class="yvpm-app-controls">
+        <button
+          id="yvpm-library-button"
+          class="yvpm-library-button"
+          type="button"
+          aria-label="打开洞见库"
+          aria-pressed="false"
+        >
+          <span class="yvpm-library-icon" aria-hidden="true"></span>
+          <span id="yvpm-library-count" class="yvpm-library-count" hidden>0</span>
+        </button>
         <div class="yvpm-text-scale-control" role="group" aria-label="文字大小">
           <div class="yvpm-text-scale-rail">
             <input
@@ -124,6 +134,40 @@
       </div>
       <div id="yvpm-status" hidden></div>
     </main>
+    <section id="yvpm-library" class="yvpm-library" aria-label="洞见库" hidden>
+      <header class="yvpm-library-header">
+        <button id="yvpm-library-back" class="yvpm-library-back" type="button">
+          <span aria-hidden="true">‹</span> 返回
+        </button>
+        <div>
+          <h2>洞见库</h2>
+          <p id="yvpm-library-total">0 条收藏</p>
+        </div>
+      </header>
+      <div class="yvpm-library-search-wrap">
+        <span class="yvpm-library-search-icon" aria-hidden="true"></span>
+        <input
+          id="yvpm-library-search"
+          type="search"
+          autocomplete="off"
+          aria-label="搜索收藏内容或视频标题"
+          placeholder="搜索收藏内容或视频标题"
+        />
+        <button
+          id="yvpm-library-search-clear"
+          class="yvpm-library-search-clear"
+          type="button"
+          aria-label="清除搜索"
+          hidden
+        >×</button>
+      </div>
+      <div id="yvpm-library-list" class="yvpm-library-list" role="list"></div>
+      <div id="yvpm-library-empty" class="yvpm-library-empty" hidden>
+        <span class="yvpm-library-empty-mark" aria-hidden="true">◇</span>
+        <h2 id="yvpm-library-empty-title">还没有收藏</h2>
+        <p id="yvpm-library-empty-copy">在摘要中圈选一段文字，就可以把它留在这里。</p>
+      </div>
+    </section>
     <div
       id="yvpm-explain-menu"
       class="yvpm-explain-menu"
@@ -131,31 +175,64 @@
       aria-label="所选文字操作"
       hidden
     >
-      <button id="yvpm-explain-selection" class="yvpm-explain-menu-primary" type="button" role="menuitem">
-        <span aria-hidden="true">✦</span>解释这段
+      <button id="yvpm-save-selection" class="yvpm-explain-menu-primary" type="button" role="menuitem">
+        <span aria-hidden="true">◇</span>收藏
+      </button>
+      <button id="yvpm-explain-selection" type="button" role="menuitem">
+        <span aria-hidden="true">✦</span>解释
       </button>
       <button id="yvpm-copy-selection" type="button" role="menuitem">复制</button>
     </div>
+    <div
+      id="yvpm-explanation-scrim"
+      class="yvpm-explanation-scrim"
+      aria-hidden="true"
+      data-state="closed"
+      hidden
+    ></div>
     <article
-      id="yvpm-explanation-card"
-      class="yvpm-explanation-card"
+      id="yvpm-explanation-drawer"
+      class="yvpm-explanation-drawer"
       role="dialog"
-      aria-modal="false"
+      aria-modal="true"
       aria-labelledby="yvpm-explanation-title"
+      aria-hidden="true"
+      data-state="closed"
+      inert
       hidden
     >
+      <div class="yvpm-explanation-grabber" aria-hidden="true"></div>
       <header class="yvpm-explanation-header">
         <div>
           <span class="yvpm-explanation-label">AI 上下文解释</span>
           <h2 id="yvpm-explanation-title"></h2>
         </div>
-        <button id="yvpm-explanation-close" class="yvpm-explanation-close" type="button" aria-label="关闭解释">×</button>
+        <button id="yvpm-explanation-close" class="yvpm-explanation-close" type="button">
+          收起 <span aria-hidden="true">↓</span>
+        </button>
       </header>
-      <div id="yvpm-explanation-body" class="yvpm-explanation-body" aria-live="polite"></div>
+      <div
+        id="yvpm-explanation-body"
+        class="yvpm-explanation-body"
+        aria-live="polite"
+        data-explanation-scroll
+      ></div>
+      <button
+        id="yvpm-explanation-latest"
+        class="yvpm-explanation-latest"
+        type="button"
+        hidden
+      >↓ 回到最新回答</button>
+      <footer
+        id="yvpm-explanation-composer"
+        class="yvpm-explanation-composer"
+      ></footer>
     </article>
     <div id="yvpm-toast" class="yvpm-toast" role="status" aria-live="polite" hidden>
-      选择新的摘要语言后会重新生成。
+      <span id="yvpm-toast-message">选择新的摘要语言后会重新生成。</span>
+      <button id="yvpm-toast-action" type="button" hidden></button>
     </div>
+    <script src="collection-utils.js"></script>
     <script src="ui-utils.js"></script>
     <script src="sidepanel.js"></script>
   </body>

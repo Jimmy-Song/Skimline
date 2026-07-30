@@ -4,6 +4,7 @@
   const DEFAULT_SECTIONS_COLLAPSED = true;
   const LANGUAGE_SETTING_KEY = "summary_language";
   const TEXT_SCALE_SETTING_KEY = "content_text_scale";
+  const CLIPPING_HINT_SETTING_KEY = "skimline_clipping_hint_seen_v1";
   const TEXT_SCALE_MIN = 85;
   const TEXT_SCALE_MAX = 125;
   const TEXT_SCALE_DEFAULT = 100;
@@ -32,6 +33,7 @@
   const state = {
     tabId: null,
     videoId: "",
+    videoTitle: "",
     loaded: false,
     loading: false,
     preparing: false,
@@ -72,6 +74,7 @@
       `explain-${Date.now()}-${Math.random().toString(36).slice(2)}`,
     explanationCaptions: null,
     explanationCaptionsPromise: null,
+    explanationCaptionsPromiseVideoId: "",
     explanationRequestId: 0,
     explanationSelection: null,
     explanationRange: null,
@@ -80,6 +83,19 @@
     explanationTurns: 0,
     explanationResult: null,
     explanationQuestion: "",
+    explanationTaskId: "",
+    explanationTaskStatus: "idle",
+    explanationDrawerOpen: false,
+    explanationDismissed: false,
+    explanationSourceTabId: null,
+    activeView: "summary",
+    summaryScrollTop: 0,
+    clippings: [],
+    clippingsRevision: 0,
+    libraryRequestId: 0,
+    libraryError: "",
+    clippingSaving: false,
+    clippingHintChecked: false,
   };
 
   const elements = {
@@ -120,14 +136,33 @@
     languageOptions: [
       ...document.querySelectorAll("#yvpm-language-menu [data-language]"),
     ],
+    libraryButton: document.querySelector("#yvpm-library-button"),
+    libraryCount: document.querySelector("#yvpm-library-count"),
+    library: document.querySelector("#yvpm-library"),
+    libraryBack: document.querySelector("#yvpm-library-back"),
+    libraryTotal: document.querySelector("#yvpm-library-total"),
+    librarySearch: document.querySelector("#yvpm-library-search"),
+    librarySearchClear: document.querySelector("#yvpm-library-search-clear"),
+    libraryList: document.querySelector("#yvpm-library-list"),
+    libraryEmpty: document.querySelector("#yvpm-library-empty"),
+    libraryEmptyTitle: document.querySelector("#yvpm-library-empty-title"),
+    libraryEmptyCopy: document.querySelector("#yvpm-library-empty-copy"),
     explainMenu: document.querySelector("#yvpm-explain-menu"),
+    saveSelection: document.querySelector("#yvpm-save-selection"),
     explainSelection: document.querySelector("#yvpm-explain-selection"),
     copySelection: document.querySelector("#yvpm-copy-selection"),
-    explanationCard: document.querySelector("#yvpm-explanation-card"),
+    explanationCard: document.querySelector("#yvpm-explanation-drawer"),
+    explanationScrim: document.querySelector("#yvpm-explanation-scrim"),
     explanationTitle: document.querySelector("#yvpm-explanation-title"),
     explanationBody: document.querySelector("#yvpm-explanation-body"),
+    explanationComposer: document.querySelector(
+      "#yvpm-explanation-composer",
+    ),
+    explanationLatest: document.querySelector("#yvpm-explanation-latest"),
     explanationClose: document.querySelector("#yvpm-explanation-close"),
     toast: document.querySelector("#yvpm-toast"),
+    toastMessage: document.querySelector("#yvpm-toast-message"),
+    toastAction: document.querySelector("#yvpm-toast-action"),
   };
 
   function runtimeMessage(message) {
@@ -156,6 +191,20 @@
         return;
       }
       chrome.tabs.sendMessage(state.tabId, message, (response) => {
+        const error = chrome.runtime.lastError;
+        if (error) reject(new Error(error.message));
+        else resolve(response);
+      });
+    });
+  }
+
+  function tabMessageTo(tabId, message) {
+    return new Promise((resolve, reject) => {
+      if (!Number.isInteger(tabId)) {
+        reject(new Error("来源视频标签页已失效"));
+        return;
+      }
+      chrome.tabs.sendMessage(tabId, message, (response) => {
         const error = chrome.runtime.lastError;
         if (error) reject(new Error(error.message));
         else resolve(response);
@@ -285,13 +334,32 @@
     }
   }
 
-  function showToast(message) {
+  function showToast(message, options = {}) {
     clearTimeout(state.toastTimer);
-    elements.toast.textContent = message;
+    elements.toastMessage.textContent = message;
+    elements.toastAction.onclick = null;
+    const actionLabel = String(options.actionLabel || "").trim();
+    const onAction =
+      typeof options.onAction === "function" ? options.onAction : null;
+    elements.toastAction.hidden = !actionLabel || !onAction;
+    elements.toastAction.textContent = actionLabel;
+    if (actionLabel && onAction) {
+      elements.toastAction.onclick = () => {
+        clearTimeout(state.toastTimer);
+        elements.toast.hidden = true;
+        elements.toastAction.onclick = null;
+        Promise.resolve()
+          .then(onAction)
+          .catch(() => {
+            showToast("操作失败，请重试");
+          });
+      };
+    }
     elements.toast.hidden = false;
     state.toastTimer = setTimeout(() => {
       elements.toast.hidden = true;
-    }, 1800);
+      elements.toastAction.onclick = null;
+    }, Math.max(800, Number(options.duration) || 1800));
   }
 
   function explanationAllowedContainer(range) {
@@ -365,28 +433,38 @@
     );
   }
 
-  function positionExplanationCard() {
-    if (elements.explanationCard.hidden) return;
-    const anchorRect = explanationAnchorRect();
-    const cardRect = elements.explanationCard.getBoundingClientRect();
-    const viewportPadding = 12;
-    const appbarBottom = 60;
-    let top = window.innerHeight - cardRect.height - viewportPadding;
-    if (anchorRect) {
-      const below = anchorRect.bottom + 12;
-      const above = anchorRect.top - cardRect.height - 12;
-      if (window.innerHeight - below >= Math.min(cardRect.height, 280)) {
-        top = below;
-      } else if (above >= appbarBottom + viewportPadding) {
-        top = above;
-      }
+  let explanationDrawerCloseTimer = null;
+
+  function setExplanationDrawerVisible(open) {
+    clearTimeout(explanationDrawerCloseTimer);
+    const wasOpen = state.explanationDrawerOpen;
+    state.explanationDrawerOpen = open;
+    if (open) {
+      elements.explanationCard.hidden = false;
+      elements.explanationScrim.hidden = false;
+      elements.explanationCard.inert = false;
+      elements.explanationCard.setAttribute("aria-hidden", "false");
+      requestAnimationFrame(() => {
+        elements.explanationCard.dataset.state = "open";
+        elements.explanationScrim.dataset.state = "open";
+        if (!wasOpen) {
+          elements.explanationClose.focus({ preventScroll: true });
+        }
+      });
+      return;
     }
-    elements.explanationCard.style.top = `${Math.round(
-      Math.max(
-        appbarBottom + viewportPadding,
-        Math.min(window.innerHeight - cardRect.height - viewportPadding, top),
-      ),
-    )}px`;
+    elements.explanationCard.dataset.state = "closed";
+    elements.explanationScrim.dataset.state = "closed";
+    elements.explanationCard.inert = true;
+    elements.explanationCard.setAttribute("aria-hidden", "true");
+    explanationDrawerCloseTimer = setTimeout(() => {
+      if (state.explanationDrawerOpen) return;
+      elements.explanationCard.hidden = true;
+      elements.explanationScrim.hidden = true;
+      elements.explanationBody.replaceChildren();
+      elements.explanationComposer.replaceChildren();
+      elements.explanationLatest.hidden = true;
+    }, 260);
   }
 
   function hideExplainMenu() {
@@ -397,17 +475,40 @@
     const row = container.closest(".yvpm-row");
     const anchorT = row ? Number(row.dataset.t) : null;
     const contextSource = row || container;
+    const pointText = String(
+      row?.querySelector(".yvpm-claim")?.textContent || "",
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    const sectionTitle = String(
+      row
+        ?.closest(".yvpm-section")
+        ?.querySelector(".yvpm-section-title")?.textContent || "",
+    )
+      .replace(/\s+/g, " ")
+      .trim();
+    let sourceType = "claim";
+    if (container.matches("#yvpm-overview-text")) sourceType = "overview";
+    else if (container.matches(".yvpm-detail p")) sourceType = "detail";
+    else if (container.matches(".yvpm-insight-card-why")) {
+      sourceType = "insightWhy";
+    } else if (container.matches(".yvpm-insight-card-detail")) {
+      sourceType = "insightDetail";
+    }
     return {
       anchorT: Number.isFinite(anchorT) ? anchorT : null,
       anchorContext: String(contextSource.textContent || "")
         .replace(/\s+/g, " ")
         .trim()
         .slice(0, 1200),
+      sourceType,
+      pointText,
+      sectionTitle,
     };
   }
 
   function captureExplainableSelection() {
-    if (!elements.explanationCard.hidden) return;
+    if (state.explanationDrawerOpen) return;
     const selection = window.getSelection();
     if (!selection || selection.isCollapsed || !selection.rangeCount) {
       hideExplainMenu();
@@ -421,7 +522,7 @@
     }
     const text = selection.toString().replace(/\s+/g, " ").trim();
     const length = [...text].length;
-    if (!length) {
+    if (length < SkimlineCollections.MIN_SELECTION_CHARS) {
       hideExplainMenu();
       return;
     }
@@ -443,6 +544,7 @@
         height: rect.height,
       },
       videoId: state.videoId,
+      videoTitle: state.videoTitle,
       targetLanguage: state.targetLanguage,
       ...anchor,
     };
@@ -464,7 +566,7 @@
       .slice(0, 8000);
   }
 
-  async function getExplanationCaptions(videoId) {
+  async function getExplanationCaptions(videoId, sourceTabId = state.tabId) {
     const existing =
       state.explanationCaptions?.videoId === videoId
         ? state.explanationCaptions
@@ -472,10 +574,14 @@
           ? state.overviewCaptions
           : null;
     if (existing?.segments?.length) return existing;
-    if (state.explanationCaptionsPromise) {
+    if (
+      state.explanationCaptionsPromise &&
+      state.explanationCaptionsPromiseVideoId === videoId
+    ) {
       return state.explanationCaptionsPromise;
     }
-    state.explanationCaptionsPromise = tabMessage({
+    state.explanationCaptionsPromiseVideoId = videoId;
+    state.explanationCaptionsPromise = tabMessageTo(sourceTabId, {
       type: "GET_CAPTION_SEGMENTS",
       videoId,
     })
@@ -491,36 +597,69 @@
             captions?.error || "当前视频没有可用于解释的字幕",
           );
         }
-        if (state.videoId !== videoId) {
-          throw new Error("视频已切换，已取消旧解释");
-        }
-        state.explanationCaptions = captions;
+        if (state.videoId === videoId) state.explanationCaptions = captions;
         return captions;
       })
       .finally(() => {
-        state.explanationCaptionsPromise = null;
+        if (state.explanationCaptionsPromiseVideoId === videoId) {
+          state.explanationCaptionsPromise = null;
+          state.explanationCaptionsPromiseVideoId = "";
+        }
       });
     return state.explanationCaptionsPromise;
   }
 
-  function cancelExplanationRequest() {
+  function cancelExplanationRequest(reason = "superseded") {
     state.explanationRequestId += 1;
-    runtimeMessage({
-      type: "CANCEL_CONTEXT_EXPLANATION",
-      clientId: state.explanationClientId,
-    }).catch(() => null);
+    const message = state.explanationTaskId
+      ? {
+          type: "CANCEL_CONTEXT_EXPLANATION",
+          taskId: state.explanationTaskId,
+          reason,
+        }
+      : {
+          type: "CANCEL_CONTEXT_EXPLANATION",
+          clientId: state.explanationClientId,
+          reason,
+        };
+    runtimeMessage(message).catch(() => null);
   }
 
-  function closeExplanation({ clearSelection = true } = {}) {
-    cancelExplanationRequest();
-    hideExplainMenu();
-    elements.explanationCard.hidden = true;
-    elements.explanationBody.replaceChildren();
-    elements.explanationTitle.textContent = "";
+  function clearExplanationLocalState({
+    clearTask = true,
+    clearDom = true,
+  } = {}) {
+    if (clearDom) {
+      elements.explanationBody.replaceChildren();
+      elements.explanationComposer.replaceChildren();
+      elements.explanationLatest.hidden = true;
+      elements.explanationTitle.textContent = "";
+    }
     state.explanationHistory = [];
     state.explanationTurns = 0;
     state.explanationResult = null;
     state.explanationQuestion = "";
+    state.explanationTaskStatus = "idle";
+    if (clearTask) state.explanationTaskId = "";
+  }
+
+  function closeExplanation({
+    clearSelection = true,
+    dismiss = true,
+    clearTask = true,
+  } = {}) {
+    const returnFocus =
+      state.explanationAnchorContainer?.closest?.("button") ||
+      elements.panel;
+    hideExplainMenu();
+    setExplanationDrawerVisible(false);
+    if (dismiss && state.explanationTaskId) {
+      runtimeMessage({
+        type: "DISMISS_CONTEXT_EXPLANATION",
+        taskId: state.explanationTaskId,
+      }).catch(() => null);
+    }
+    state.explanationDismissed = dismiss;
     if (clearSelection) {
       clearExplanationHighlight();
       state.explanationSelection = null;
@@ -528,12 +667,22 @@
       state.explanationAnchorContainer = null;
       window.getSelection()?.removeAllRanges();
     }
+    clearExplanationLocalState({ clearTask, clearDom: false });
+    if (returnFocus === elements.panel) {
+      elements.panel.setAttribute("tabindex", "-1");
+    }
+    returnFocus?.focus?.({ preventScroll: true });
   }
 
-  function resetExplanationContext() {
-    closeExplanation();
+  function resetExplanationContext({
+    cancel = false,
+    dismiss = false,
+  } = {}) {
+    if (cancel) cancelExplanationRequest("context_reset");
+    closeExplanation({ dismiss, clearTask: true });
     state.explanationCaptions = null;
     state.explanationCaptionsPromise = null;
+    state.explanationCaptionsPromiseVideoId = "";
   }
 
   function makeElement(tag, className = "", text = "") {
@@ -543,24 +692,336 @@
     return element;
   }
 
-  function showExplanationCard() {
-    elements.explanationCard.hidden = false;
-    requestAnimationFrame(positionExplanationCard);
+  function updateLibraryCount(count = state.clippings.length) {
+    const normalizedCount = Math.max(0, Math.floor(Number(count) || 0));
+    elements.libraryCount.textContent =
+      normalizedCount > 999 ? "999+" : String(normalizedCount);
+    elements.libraryCount.hidden = normalizedCount === 0;
+    elements.libraryButton.setAttribute(
+      "aria-label",
+      normalizedCount
+        ? `打开洞见库，已收藏 ${normalizedCount} 条`
+        : "打开洞见库，暂无收藏",
+    );
   }
 
-  function renderExplanationLoading() {
+  function formatClippingDate(timestamp) {
+    try {
+      return new Intl.DateTimeFormat(navigator.language || "zh-CN", {
+        year: "numeric",
+        month: "short",
+        day: "numeric",
+      }).format(new Date(timestamp));
+    } catch {
+      return new Date(timestamp).toLocaleDateString();
+    }
+  }
+
+  function renderLibraryEmpty(title, copy) {
+    elements.libraryList.replaceChildren();
+    elements.libraryEmptyTitle.textContent = title;
+    elements.libraryEmptyCopy.textContent = copy;
+    elements.libraryEmpty.hidden = false;
+  }
+
+  function clippingSourceLabel(item) {
+    if (
+      item.anchorT !== null &&
+      item.anchorT !== undefined &&
+      Number.isFinite(Number(item.anchorT))
+    ) {
+      return YouTubeSummary.formatTimestamp(item.anchorT);
+    }
+    return "从头观看";
+  }
+
+  function createClippingCard(item) {
+    const card = makeElement("article", "yvpm-clipping-card");
+    card.setAttribute("role", "listitem");
+    card.dataset.clippingId = item.id;
+
+    const quote = makeElement(
+      "blockquote",
+      "yvpm-clipping-quote",
+      item.selectedText,
+    );
+    card.append(quote);
+
+    if (
+      item.pointText &&
+      SkimlineCollections.normalizeClippingText(item.pointText) !==
+        SkimlineCollections.normalizeClippingText(item.selectedText)
+    ) {
+      const context = makeElement("p", "yvpm-clipping-context");
+      const label = makeElement("span", "", "所属观点");
+      context.append(label, document.createTextNode(item.pointText));
+      card.append(context);
+    }
+
+    const footer = makeElement("footer", "yvpm-clipping-footer");
+    const source = makeElement("button", "yvpm-clipping-source");
+    source.type = "button";
+    source.setAttribute(
+      "aria-label",
+      `回到视频 ${item.videoTitle} ${clippingSourceLabel(item)}`,
+    );
+    const title = makeElement(
+      "span",
+      "yvpm-clipping-video-title",
+      item.videoTitle,
+    );
+    const sourceMeta = makeElement(
+      "span",
+      "yvpm-clipping-source-meta",
+      `${clippingSourceLabel(item)} · ${formatClippingDate(item.savedAt)}`,
+    );
+    source.append(title, sourceMeta);
+    source.addEventListener("click", () => openClippingSource(item));
+
+    const remove = makeElement("button", "yvpm-clipping-delete", "×");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `删除收藏：${item.selectedText}`);
+    remove.addEventListener("click", () => deleteClippingById(item.id));
+
+    footer.append(source, remove);
+    card.append(footer);
+    return card;
+  }
+
+  function renderLibrary() {
+    const total = state.clippings.length;
+    const query = elements.librarySearch.value;
+    const matches = SkimlineCollections.searchClippings(
+      state.clippings,
+      query,
+    );
+    elements.libraryTotal.textContent = query
+      ? `找到 ${matches.length} 条 · 共 ${total} 条`
+      : `${total} 条收藏`;
+    elements.librarySearchClear.hidden = !query;
+    updateLibraryCount(total);
+
+    if (state.libraryError) {
+      renderLibraryEmpty("暂时无法读取洞见库", state.libraryError);
+      return;
+    }
+    if (!total) {
+      renderLibraryEmpty(
+        "还没有收藏",
+        "在摘要中圈选一段文字，就可以把它留在这里。",
+      );
+      return;
+    }
+    if (!matches.length) {
+      renderLibraryEmpty(
+        "没有找到相关收藏",
+        "换一个关键词，搜索收藏内容或视频标题。",
+      );
+      return;
+    }
+
+    elements.libraryEmpty.hidden = true;
+    const fragment = document.createDocumentFragment();
+    for (const item of matches) fragment.append(createClippingCard(item));
+    elements.libraryList.replaceChildren(fragment);
+  }
+
+  async function loadClippings() {
+    const requestId = ++state.libraryRequestId;
+    try {
+      const response = await runtimeMessage({ type: "LIST_CLIPPINGS" });
+      if (requestId !== state.libraryRequestId) return;
+      if (!response?.ok) {
+        throw new Error(response?.error || "读取洞见库失败");
+      }
+      if (
+        Number(response.revision) < state.clippingsRevision
+      ) {
+        return;
+      }
+      const store = SkimlineCollections.normalizeClippingsStore({
+        schemaVersion: SkimlineCollections.CLIPPINGS_SCHEMA_VERSION,
+        revision: response.revision,
+        items: response.items,
+      });
+      state.clippings = store.items;
+      state.clippingsRevision = store.revision;
+      state.libraryError = "";
+      updateLibraryCount();
+      if (state.activeView === "library") renderLibrary();
+    } catch (error) {
+      if (requestId !== state.libraryRequestId) return;
+      state.libraryError = error?.message || "读取洞见库失败，请重试";
+      if (state.activeView === "library") renderLibrary();
+    }
+  }
+
+  function openLibrary() {
+    if (state.activeView === "library") return;
+    state.summaryScrollTop = window.scrollY;
+    state.activeView = "library";
+    if (!elements.explanationCard.hidden) closeExplanation();
+    else {
+      hideExplainMenu();
+      clearCapturedSelection();
+    }
+    elements.panel.hidden = true;
+    elements.library.hidden = false;
+    elements.libraryButton.setAttribute("aria-pressed", "true");
+    window.scrollTo(0, 0);
+    renderLibrary();
+    void loadClippings();
+    requestAnimationFrame(() => elements.librarySearch.focus());
+  }
+
+  function closeLibrary() {
+    if (state.activeView !== "library") return;
+    state.activeView = "summary";
+    elements.library.hidden = true;
+    elements.panel.hidden = false;
+    elements.libraryButton.setAttribute("aria-pressed", "false");
+    requestAnimationFrame(() => window.scrollTo(0, state.summaryScrollTop));
+    if (state.loaded) void showClippingHintOnce();
+  }
+
+  async function restoreClippingItem(item) {
+    const response = await runtimeMessage({
+      type: "RESTORE_CLIPPING",
+      item,
+    });
+    if (!response?.ok) {
+      throw new Error(response?.error || "撤销删除失败");
+    }
+    state.clippingsRevision = Math.max(
+      state.clippingsRevision,
+      Number(response.revision) || 0,
+    );
+    upsertClipping(response.item);
+    showToast(response.duplicate ? "这段已经在洞见库中" : "已恢复收藏");
+  }
+
+  async function deleteClippingById(id) {
+    try {
+      const response = await runtimeMessage({
+        type: "DELETE_CLIPPING",
+        id,
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "删除收藏失败");
+      }
+      if (!response.deletedItem) {
+        void loadClippings();
+        showToast("这条收藏已经被删除");
+        return;
+      }
+      state.clippingsRevision = Math.max(
+        state.clippingsRevision,
+        Number(response.revision) || 0,
+      );
+      state.clippings = state.clippings.filter((item) => item.id !== id);
+      renderLibrary();
+      showToast("已删除", {
+        actionLabel: "撤销",
+        onAction: () => restoreClippingItem(response.deletedItem),
+        duration: 4000,
+      });
+    } catch (error) {
+      showToast(error?.message || "删除收藏失败");
+    }
+  }
+
+  function updateTabUrl(tabId, url) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.update(tabId, { url }, (tab) => {
+        const error = chrome.runtime.lastError;
+        if (error) reject(new Error(error.message));
+        else resolve(tab);
+      });
+    });
+  }
+
+  function createTabWithUrl(url) {
+    return new Promise((resolve, reject) => {
+      chrome.tabs.create({ url }, (tab) => {
+        const error = chrome.runtime.lastError;
+        if (error) reject(new Error(error.message));
+        else resolve(tab);
+      });
+    });
+  }
+
+  async function openClippingSource(item) {
+    const url = new URL("https://www.youtube.com/watch");
+    url.searchParams.set("v", item.videoId);
+    if (
+      item.anchorT !== null &&
+      item.anchorT !== undefined &&
+      Number.isFinite(Number(item.anchorT))
+    ) {
+      url.searchParams.set("t", `${Math.floor(Number(item.anchorT))}s`);
+    }
+    closeLibrary();
+    try {
+      if (state.tabId && state.videoId) {
+        await updateTabUrl(state.tabId, url.href);
+      } else {
+        await createTabWithUrl(url.href);
+      }
+    } catch {
+      try {
+        await createTabWithUrl(url.href);
+      } catch {
+        showToast("暂时无法打开来源视频");
+      }
+    }
+  }
+
+  async function showClippingHintOnce() {
+    if (state.clippingHintChecked || state.activeView !== "summary") return;
+    state.clippingHintChecked = true;
+    try {
+      const stored = await chrome.storage.local.get(
+        CLIPPING_HINT_SETTING_KEY,
+      );
+      if (stored?.[CLIPPING_HINT_SETTING_KEY]) return;
+      if (state.activeView !== "summary") {
+        state.clippingHintChecked = false;
+        return;
+      }
+      showToast("圈选摘要中的文字，可以收藏、解释或复制", {
+        duration: 3600,
+      });
+      await chrome.storage.local.set({
+        [CLIPPING_HINT_SETTING_KEY]: true,
+      });
+    } catch {
+      // 首次提示失败不影响收藏功能。
+    }
+  }
+
+  function showExplanationCard() {
+    state.explanationDismissed = false;
+    setExplanationDrawerVisible(true);
+  }
+
+  function renderExplanationLoading({
+    message = "正在结合整段视频理解这段内容…",
+    hint = "会优先查看当前时间附近的字幕，再检索整段视频。",
+  } = {}) {
     elements.explanationTitle.textContent =
       state.explanationSelection?.text || "解释所选内容";
     const status = makeElement("div", "yvpm-explanation-loading");
     const spinner = makeElement("span", "yvpm-spinner");
     spinner.setAttribute("aria-hidden", "true");
-    status.append(spinner, document.createTextNode("正在结合整段视频理解这段内容…"));
-    const hint = makeElement(
+    status.append(spinner, document.createTextNode(message));
+    const hintElement = makeElement(
       "p",
       "yvpm-explanation-loading-hint",
-      "会优先查看当前时间附近的字幕，再检索整段视频。",
+      hint,
     );
-    elements.explanationBody.replaceChildren(status, hint);
+    elements.explanationBody.replaceChildren(status, hintElement);
+    elements.explanationComposer.replaceChildren();
+    elements.explanationLatest.hidden = true;
     showExplanationCard();
   }
 
@@ -590,23 +1051,74 @@
     return group;
   }
 
-  function mergeExplanationEvidence(current, next) {
-    const seen = new Set();
-    return [...(current || []), ...(next || [])]
-      .filter((item) => {
-        if (!Number.isFinite(Number(item?.t)) || seen.has(Number(item.t))) {
-          return false;
-        }
-        seen.add(Number(item.t));
-        return true;
-      })
-      .slice(0, 3);
+  function renderExplanationComposer({ busy = false } = {}) {
+    elements.explanationComposer.replaceChildren();
+    if (
+      !state.explanationResult ||
+      state.explanationTurns >= MAX_EXPLANATION_TURNS
+    ) {
+      return;
+    }
+    const meta = makeElement("div", "yvpm-explanation-composer-meta");
+    meta.append(
+      makeElement(
+        "span",
+        "",
+        busy ? "正在回答本轮问题…" : "继续追问这个概念",
+      ),
+      makeElement(
+        "strong",
+        "",
+        `${state.explanationTurns} / ${MAX_EXPLANATION_TURNS}`,
+      ),
+    );
+    const form = makeElement("form", "yvpm-explanation-form");
+    const input = makeElement("input");
+    input.type = "text";
+    input.maxLength = MAX_EXPLANATION_SELECTION_CHARS;
+    input.placeholder = "继续问这个概念…";
+    input.setAttribute("aria-label", "继续追问");
+    input.disabled = busy;
+    const submit = makeElement("button", "", "↑");
+    submit.type = "submit";
+    submit.disabled = busy;
+    submit.setAttribute("aria-label", "发送问题");
+    form.append(input, submit);
+    form.addEventListener("submit", (event) => {
+      event.preventDefault();
+      askExplanation(input.value);
+    });
+    elements.explanationComposer.append(meta, form);
+  }
+
+  function createExplanationTurn(question, answer, index, open) {
+    const details = makeElement("details", "yvpm-explanation-turn");
+    details.open = open;
+    const summary = document.createElement("summary");
+    summary.append(
+      makeElement("span", "yvpm-explanation-turn-index", String(index + 1)),
+      makeElement("span", "yvpm-explanation-turn-question", question),
+      makeElement("span", "yvpm-explanation-turn-chevron", "⌄"),
+    );
+    const response = makeElement(
+      "p",
+      "yvpm-explanation-turn-answer",
+      answer,
+    );
+    details.append(summary, response);
+    return details;
   }
 
   function renderExplanationCard({ busy = false } = {}) {
     const result = state.explanationResult;
     if (!result) return;
-    elements.explanationTitle.textContent = state.explanationSelection.text;
+    elements.explanationTitle.textContent =
+      state.explanationSelection?.text || "解释所选内容";
+    const scroller = elements.explanationBody;
+    const previousTop = scroller.scrollTop;
+    const distanceFromBottom =
+      scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight;
+    const followLatest = distanceFromBottom < 72;
     const fragment = document.createDocumentFragment();
 
     if (result.simple) {
@@ -652,30 +1164,33 @@
         "div",
         "yvpm-explanation-conversation",
       );
-      for (const entry of followupHistory) {
-        conversation.append(
-          makeElement(
-            "p",
-            `yvpm-explanation-message yvpm-explanation-message-${entry.role}`,
-            entry.content,
-          ),
-        );
+      const turns = [];
+      for (let index = 0; index < followupHistory.length; index += 2) {
+        const question = followupHistory[index];
+        const answer = followupHistory[index + 1];
+        if (question?.role !== "user" || answer?.role !== "assistant") continue;
+        turns.push({ question: question.content, answer: answer.content });
       }
-      if (busy && state.explanationQuestion) {
+      turns.forEach((turn, index) => {
         conversation.append(
-          makeElement(
-            "p",
-            "yvpm-explanation-message yvpm-explanation-message-user",
-            state.explanationQuestion,
+          createExplanationTurn(
+            turn.question,
+            turn.answer,
+            index,
+            index === turns.length - 1 && !busy,
           ),
         );
-        const pending = makeElement(
-          "p",
-          "yvpm-explanation-message yvpm-explanation-message-assistant yvpm-explanation-message-pending",
+      });
+      if (busy && state.explanationQuestion) {
+        const pending = createExplanationTurn(
+          state.explanationQuestion,
+          "正在回答…",
+          turns.length,
+          true,
         );
-        const spinner = makeElement("span", "yvpm-spinner");
-        spinner.setAttribute("aria-hidden", "true");
-        pending.append(spinner, document.createTextNode("正在回答…"));
+        pending
+          .querySelector(".yvpm-explanation-turn-answer")
+          ?.classList.add("yvpm-explanation-message-pending");
         conversation.append(pending);
       }
       fragment.append(conversation);
@@ -699,25 +1214,7 @@
       fragment.append(suggestions);
     }
 
-    if (state.explanationTurns < MAX_EXPLANATION_TURNS) {
-      const form = makeElement("form", "yvpm-explanation-form");
-      const input = makeElement("input");
-      input.type = "text";
-      input.maxLength = MAX_EXPLANATION_SELECTION_CHARS;
-      input.placeholder = "继续问这个概念…";
-      input.setAttribute("aria-label", "继续追问");
-      input.disabled = busy;
-      const submit = makeElement("button", "", "↑");
-      submit.type = "submit";
-      submit.disabled = busy;
-      submit.setAttribute("aria-label", "发送问题");
-      form.append(input, submit);
-      form.addEventListener("submit", (event) => {
-        event.preventDefault();
-        askExplanation(input.value);
-      });
-      fragment.append(form);
-    } else {
+    if (state.explanationTurns >= MAX_EXPLANATION_TURNS) {
       fragment.append(
         makeElement(
           "p",
@@ -735,7 +1232,17 @@
       ),
     );
     elements.explanationBody.replaceChildren(fragment);
+    renderExplanationComposer({ busy });
     showExplanationCard();
+    requestAnimationFrame(() => {
+      if (followLatest) {
+        scroller.scrollTop = scroller.scrollHeight;
+        elements.explanationLatest.hidden = true;
+      } else {
+        scroller.scrollTop = previousTop;
+        elements.explanationLatest.hidden = false;
+      }
+    });
   }
 
   function renderExplanationError(message, retry) {
@@ -748,27 +1255,129 @@
     button.type = "button";
     button.addEventListener("click", retry);
     elements.explanationBody.replaceChildren(error, button);
+    elements.explanationComposer.replaceChildren();
+    elements.explanationLatest.hidden = true;
     showExplanationCard();
   }
 
-  function explanationRequestPayload(captions, question = "") {
+  function explanationRequestPayload(
+    captions,
+    selection = state.explanationSelection,
+    videoOutline = explanationOutline(),
+  ) {
     return {
       clientId: state.explanationClientId,
-      videoId: state.videoId,
-      targetLanguage: state.targetLanguage,
+      videoId: selection.videoId,
+      sourceTabId: state.explanationSourceTabId,
+      targetLanguage: selection.targetLanguage || state.targetLanguage,
       sourceLang: captions.sourceLang || "",
-      selectedText: state.explanationSelection.text,
-      anchorT: state.explanationSelection.anchorT,
-      anchorContext: state.explanationSelection.anchorContext,
-      videoOutline: explanationOutline(),
-      segments: captions.segments,
-      history: state.explanationHistory,
-      question,
+      selectedText: selection.text,
+      anchorT: selection.anchorT,
+      anchorContext: selection.anchorContext,
+      sourceType: selection.sourceType,
+      pointText: selection.pointText,
+      sectionTitle: selection.sectionTitle,
+      videoTitle: selection.videoTitle,
+      videoOutline,
+      segments: Array.isArray(captions.segments) ? captions.segments : [],
     };
   }
 
+  function taskSelectionForUi(task) {
+    const selection = task?.selection || {};
+    return {
+      text: String(selection.selectedText || ""),
+      videoId: String(task?.videoId || selection.videoId || ""),
+      videoTitle: String(selection.videoTitle || ""),
+      targetLanguage: String(task?.targetLanguage || ""),
+      anchorT:
+        Number.isFinite(Number(selection.anchorT))
+          ? Number(selection.anchorT)
+          : null,
+      anchorContext: String(selection.anchorContext || ""),
+      sourceType: String(selection.sourceType || "claim"),
+      pointText: String(selection.pointText || ""),
+      sectionTitle: String(selection.sectionTitle || ""),
+      rect: null,
+    };
+  }
+
+  function applyExplanationTask(task, { open = true } = {}) {
+    if (!task?.taskId) return;
+    state.explanationTaskId = task.taskId;
+    state.explanationTaskStatus = String(task.status || "idle");
+    state.explanationTurns = Math.max(0, Number(task.turns) || 0);
+    state.explanationHistory = Array.isArray(task.history)
+      ? task.history
+      : [];
+    state.explanationResult = task.result || null;
+    state.explanationQuestion = String(task.pendingQuestion || "");
+    state.explanationDismissed = Boolean(task.dismissed);
+    if (
+      !state.explanationSelection ||
+      state.explanationSelection.videoId !== task.videoId
+    ) {
+      state.explanationSelection = taskSelectionForUi(task);
+      state.explanationRange = null;
+      state.explanationAnchorContainer = null;
+    }
+    if (task.status === "failed") {
+      if (open) {
+        if (task.result) {
+          state.explanationQuestion = "";
+          renderExplanationCard();
+          showToast(task.error || "本轮回答失败，可以重新提问");
+        } else {
+          renderExplanationError(
+            task.error || "解释失败，请重试",
+            runInitialExplanation,
+          );
+        }
+      }
+      return;
+    }
+    if (!task.result) {
+      if (open) renderExplanationLoading();
+      return;
+    }
+    if (open) {
+      renderExplanationCard({
+        busy:
+          task.status === "queued" ||
+          task.status === "running" ||
+          task.status === "recovering",
+      });
+    }
+  }
+
+  async function restoreExplanationTaskForVideo(videoId) {
+    if (!videoId) return;
+    try {
+      const response = await runtimeMessage({
+        type: "GET_CONTEXT_EXPLANATION_TASK",
+        videoId,
+        targetLanguage: state.targetLanguage,
+      });
+      if (
+        !response?.ok ||
+        !response.task ||
+        response.task.dismissed ||
+        response.task.videoId !== state.videoId ||
+        response.task.targetLanguage !== state.targetLanguage ||
+        ["cancelled", "expired"].includes(response.task.status)
+      ) {
+        return;
+      }
+      applyExplanationTask(response.task, { open: true });
+    } catch {
+      // 解释恢复失败不影响视频摘要。
+    }
+  }
+
   async function runInitialExplanation() {
-    const selection = state.explanationSelection;
+    const selection = state.explanationSelection
+      ? { ...state.explanationSelection }
+      : null;
     if (!selection || selection.videoId !== state.videoId) {
       hideExplainMenu();
       return;
@@ -780,42 +1389,62 @@
     state.explanationResult = null;
     state.explanationQuestion = "";
     const requestId = ++state.explanationRequestId;
-    const videoId = state.videoId;
-    renderExplanationLoading();
+    const videoId = selection.videoId;
+    const sourceTabId = state.tabId;
+    const videoOutline = explanationOutline();
+    state.explanationSourceTabId = sourceTabId;
+    renderExplanationLoading({
+      message: "正在读取视频上下文…",
+      hint: "会先读取当前时间附近的字幕，再检索整段视频。",
+    });
     try {
-      const captions = await getExplanationCaptions(videoId);
-      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
-        return;
+      let captions = {
+        videoId,
+        sourceLang: "",
+        segments: [],
+      };
+      try {
+        captions = await getExplanationCaptions(videoId, sourceTabId);
+      } catch {
+        // 字幕暂时不可用时仍提供通用解释；后台会明确标记无法确认视频语境。
       }
+      if (requestId !== state.explanationRequestId) return;
+      if (state.explanationDrawerOpen) renderExplanationLoading();
       const response = await runtimeMessage({
-        type: "EXPLAIN_VIDEO_SELECTION",
-        payload: explanationRequestPayload(captions),
+        type: "START_CONTEXT_EXPLANATION",
+        payload: explanationRequestPayload(
+          captions,
+          selection,
+          videoOutline,
+        ),
       });
-      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
-        return;
-      }
       if (!response?.ok) {
         throw new Error(response?.error || "解释失败，请重试");
       }
-      state.explanationResult = {
-        simple: response.simple,
-        inVideo: response.inVideo,
-        evidence: response.evidence || [],
-        suggestedQuestions: response.suggestedQuestions || [],
-        uncertain: response.uncertain,
-        notice: response.notice,
-      };
-      state.explanationHistory = [
-        {
-          role: "assistant",
-          content: [response.simple, response.inVideo]
-            .filter(Boolean)
-            .join("\n"),
-        },
-      ];
-      renderExplanationCard();
+      if (requestId !== state.explanationRequestId) {
+        runtimeMessage({
+          type: "CANCEL_CONTEXT_EXPLANATION",
+          taskId: response.task?.taskId,
+          reason: "superseded",
+        }).catch(() => null);
+        return;
+      }
+      if (state.explanationDismissed) {
+        runtimeMessage({
+          type: "DISMISS_CONTEXT_EXPLANATION",
+          taskId: response.task?.taskId,
+        }).catch(() => null);
+        return;
+      }
+      const stillCurrentSelection =
+        videoId === state.videoId &&
+        state.explanationDrawerOpen;
+      applyExplanationTask(response.task, { open: stillCurrentSelection });
     } catch (error) {
-      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
+      if (
+        requestId !== state.explanationRequestId ||
+        !state.explanationDrawerOpen
+      ) {
         return;
       }
       if (error?.message === "解释已取消") return;
@@ -830,57 +1459,115 @@
       showToast("问题控制在 200 个字以内会更准确");
       return;
     }
-    if (state.explanationTurns >= MAX_EXPLANATION_TURNS) return;
-    const requestId = ++state.explanationRequestId;
-    const videoId = state.videoId;
+    if (
+      state.explanationTurns >= MAX_EXPLANATION_TURNS ||
+      !state.explanationTaskId ||
+      ["queued", "running", "recovering"].includes(
+        state.explanationTaskStatus,
+      )
+    ) {
+      return;
+    }
     state.explanationQuestion = question;
+    state.explanationTaskStatus = "queued";
     renderExplanationCard({ busy: true });
     try {
-      const captions = await getExplanationCaptions(videoId);
-      if (
-        requestId !== state.explanationRequestId ||
-        videoId !== state.videoId ||
-        elements.explanationCard.hidden
-      ) {
-        return;
-      }
       const response = await runtimeMessage({
-        type: "EXPLAIN_VIDEO_SELECTION",
-        payload: explanationRequestPayload(captions, question),
+        type: "ASK_CONTEXT_EXPLANATION",
+        payload: {
+          taskId: state.explanationTaskId,
+          question,
+          expectedTurn: state.explanationTurns,
+        },
       });
-      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
-        return;
-      }
       if (!response?.ok) {
         throw new Error(response?.error || "回答失败，请重试");
       }
-      state.explanationHistory.push(
-        { role: "user", content: question },
-        { role: "assistant", content: response.answer },
-      );
-      state.explanationTurns += 1;
-      state.explanationResult.evidence = mergeExplanationEvidence(
-        state.explanationResult.evidence,
-        response.evidence,
-      );
-      state.explanationResult.suggestedQuestions =
-        response.suggestedQuestions || [];
-      if (response.uncertain || response.notice) {
-        state.explanationResult.uncertain = true;
-        state.explanationResult.notice =
-          response.notice || state.explanationResult.notice;
-      }
-      state.explanationQuestion = "";
-      renderExplanationCard();
+      applyExplanationTask(response.task, {
+        open: state.explanationDrawerOpen,
+      });
     } catch (error) {
-      if (requestId !== state.explanationRequestId || videoId !== state.videoId) {
-        return;
-      }
       state.explanationQuestion = "";
+      state.explanationTaskStatus = "complete";
       renderExplanationCard();
       if (error?.message !== "解释已取消") {
         showToast(error?.message || "回答失败，请重试");
       }
+    }
+  }
+
+  function clearCapturedSelection() {
+    clearExplanationHighlight();
+    state.explanationSelection = null;
+    state.explanationRange = null;
+    state.explanationAnchorContainer = null;
+    window.getSelection()?.removeAllRanges();
+  }
+
+  function upsertClipping(item) {
+    if (!item) return;
+    state.clippings = SkimlineCollections.normalizeClippingsStore({
+      schemaVersion: SkimlineCollections.CLIPPINGS_SCHEMA_VERSION,
+      revision: state.clippingsRevision,
+      items: [item, ...state.clippings],
+    }).items;
+    updateLibraryCount();
+    if (state.activeView === "library") renderLibrary();
+  }
+
+  async function saveCurrentSelection() {
+    const selection = state.explanationSelection;
+    if (
+      state.clippingSaving ||
+      !selection ||
+      !selection.videoId ||
+      selection.videoId !== state.videoId
+    ) {
+      hideExplainMenu();
+      return;
+    }
+    state.clippingSaving = true;
+    elements.saveSelection.disabled = true;
+    hideExplainMenu();
+    try {
+      const response = await runtimeMessage({
+        type: "SAVE_CLIPPING",
+        payload: {
+          selectedText: selection.text,
+          videoId: selection.videoId,
+          videoTitle:
+            selection.videoTitle ||
+            state.videoTitle ||
+            `YouTube 视频 ${selection.videoId}`,
+          anchorT: selection.anchorT,
+          sourceType: selection.sourceType,
+          pointText: selection.pointText,
+          sectionTitle: selection.sectionTitle,
+          targetLanguage: selection.targetLanguage,
+        },
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "收藏失败，请重试");
+      }
+      state.clippingsRevision = Math.max(
+        state.clippingsRevision,
+        Number(response.revision) || 0,
+      );
+      upsertClipping(response.item);
+      clearCapturedSelection();
+      showToast(response.duplicate ? "这段已收藏过" : "已收藏到洞见库");
+    } catch (error) {
+      showToast(error?.message || "收藏失败，请重试");
+      if (
+        state.explanationSelection === selection &&
+        selection.videoId === state.videoId
+      ) {
+        elements.explainMenu.hidden = false;
+        positionExplainMenu();
+      }
+    } finally {
+      state.clippingSaving = false;
+      elements.saveSelection.disabled = false;
     }
   }
 
@@ -1670,6 +2357,7 @@
       mergePoints(points, false, insightMap);
       renderIntentControls(summary);
       if (elements.overview.hidden) showOverviewError();
+      void showClippingHintOnce();
       return;
     }
     state.sectionGroups = groups;
@@ -1687,16 +2375,12 @@
     renderIntentControls(summary);
     if (elements.overview.hidden) showOverviewError();
     updateNowPlaying({ follow: false });
+    void showClippingHintOnce();
   }
 
   function clearPoints({ preserveOverview = false } = {}) {
-    if (
-      !elements.explanationCard.hidden ||
-      !elements.explainMenu.hidden ||
-      state.explanationSelection
-    ) {
-      closeExplanation();
-    }
+    hideExplainMenu();
+    if (!state.explanationDrawerOpen) clearCapturedSelection();
     clearRecommendation({ restoreSections: false, clearInput: true });
     state.defaultRecommendationRequestId += 1;
     state.defaultRecommendations = [];
@@ -1728,12 +2412,13 @@
     elements.empty.hidden = false;
   }
 
-  function switchToVideo(videoId, currentTime = 0) {
+  function switchToVideo(videoId, currentTime = 0, videoTitle = "") {
     if (
       videoId &&
       state.videoId === videoId &&
       (state.loading || state.loaded || state.preparing)
     ) {
+      if (videoTitle) state.videoTitle = videoTitle;
       state.currentTime = Number(currentTime) || state.currentTime;
       updateNowPlaying({ follow: false });
       return;
@@ -1741,6 +2426,9 @@
     resetExplanationContext();
     state.epoch += 1;
     state.videoId = videoId || "";
+    state.videoTitle = videoId
+      ? String(videoTitle || "").trim() || `YouTube 视频 ${videoId}`
+      : "";
     state.loaded = false;
     state.loading = false;
     state.preparing = false;
@@ -1759,6 +2447,7 @@
     elements.empty.hidden = true;
     setStatus("正在准备摘要…");
     loadSummary();
+    void restoreExplanationTaskForVideo(state.videoId);
   }
 
   function showLoadError(error, retry) {
@@ -2060,6 +2749,9 @@
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (epoch !== state.epoch) return;
     state.tabId = tab?.id || null;
+    state.videoTitle = String(tab?.title || "")
+      .replace(/\s*-\s*YouTube\s*$/i, "")
+      .trim();
     if (!state.tabId) {
       state.videoId = "";
       showEmpty();
@@ -2072,14 +2764,36 @@
         switchToVideo("");
         return;
       }
-      switchToVideo(response.videoId, response.currentTime);
+      switchToVideo(
+        response.videoId,
+        response.currentTime,
+        response.videoTitle || state.videoTitle,
+      );
     } catch {
       if (epoch !== state.epoch) return;
       switchToVideo("");
     }
   }
 
+  function handleActiveTabChanged() {
+    useActiveTab();
+  }
+
   chrome.runtime.onMessage.addListener((message, sender) => {
+    if (
+      message?.type === "CONTEXT_EXPLANATION_TASK_UPDATED" &&
+      message.task?.taskId === state.explanationTaskId &&
+      message.task.videoId === state.videoId &&
+      message.task.targetLanguage === state.targetLanguage
+    ) {
+      applyExplanationTask(message.task, {
+        open:
+          state.explanationDrawerOpen &&
+          !message.task.dismissed &&
+          !["cancelled", "expired"].includes(message.task.status),
+      });
+      return;
+    }
     if (
       message?.type === "SUMMARY_CHUNK" &&
       message.videoId === state.videoId &&
@@ -2187,17 +2901,26 @@
       message?.type === "VIDEO_CHANGED" &&
       sender.tab?.id === state.tabId
     ) {
-      switchToVideo(message.videoId);
+      switchToVideo(message.videoId, 0, message.videoTitle);
     }
   });
 
-  chrome.tabs.onActivated.addListener(useActiveTab);
+  chrome.tabs.onActivated.addListener(handleActiveTabChanged);
+  chrome.tabs.onRemoved.addListener((tabId) => {
+    if (tabId !== state.tabId) return;
+    useActiveTab();
+  });
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (tabId !== state.tabId) return;
+    if (changeInfo.title) {
+      state.videoTitle = String(changeInfo.title)
+        .replace(/\s*-\s*YouTube\s*$/i, "")
+        .trim();
+    }
     if (changeInfo.url) {
       const videoId = YouTubeSummary.getVideoId(changeInfo.url);
       if (videoId) {
-        switchToVideo(videoId);
+        switchToVideo(videoId, 0, state.videoTitle);
         return;
       }
     }
@@ -2223,9 +2946,40 @@
   elements.explainMenu.addEventListener("mousedown", (event) => {
     event.preventDefault();
   });
+  elements.saveSelection.addEventListener("click", saveCurrentSelection);
   elements.explainSelection.addEventListener("click", runInitialExplanation);
   elements.copySelection.addEventListener("click", copyExplanationSelection);
   elements.explanationClose.addEventListener("click", () => closeExplanation());
+  elements.explanationScrim.addEventListener("click", () => closeExplanation());
+  elements.explanationLatest.addEventListener("click", () => {
+    elements.explanationBody.scrollTo({
+      top: elements.explanationBody.scrollHeight,
+      behavior: "smooth",
+    });
+    elements.explanationLatest.hidden = true;
+  });
+  elements.explanationBody.addEventListener(
+    "scroll",
+    () => {
+      const distanceFromBottom =
+        elements.explanationBody.scrollHeight -
+        elements.explanationBody.scrollTop -
+        elements.explanationBody.clientHeight;
+      elements.explanationLatest.hidden = distanceFromBottom < 72;
+    },
+    { passive: true },
+  );
+  elements.libraryButton.addEventListener("click", () => {
+    if (state.activeView === "library") closeLibrary();
+    else openLibrary();
+  });
+  elements.libraryBack.addEventListener("click", closeLibrary);
+  elements.librarySearch.addEventListener("input", renderLibrary);
+  elements.librarySearchClear.addEventListener("click", () => {
+    elements.librarySearch.value = "";
+    renderLibrary();
+    elements.librarySearch.focus();
+  });
 
   elements.languageButton.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -2263,6 +3017,8 @@
         startPrepareCountdown();
         return;
       }
+      cancelExplanationRequest("language_changed");
+      closeExplanation({ dismiss: false, clearTask: true });
       state.languageSetting = nextSetting;
       updateLanguageControl();
       await chrome.storage.local.set({
@@ -2308,13 +3064,11 @@
     "scroll",
     () => {
       if (!elements.explainMenu.hidden) positionExplainMenu();
-      if (!elements.explanationCard.hidden) positionExplanationCard();
     },
     { passive: true },
   );
   window.addEventListener("resize", () => {
     if (!elements.explainMenu.hidden) positionExplainMenu();
-    if (!elements.explanationCard.hidden) positionExplanationCard();
   });
   document.addEventListener("click", (event) => {
     if (!event.target.closest(".yvpm-language-control")) {
@@ -2331,13 +3085,32 @@
     if (event.key === "Escape") {
       const languageWasOpen = !elements.languageMenu.hidden;
       toggleLanguageMenu(false);
-      if (!elements.explanationCard.hidden) {
+      if (state.explanationDrawerOpen) {
         closeExplanation();
+      } else if (!languageWasOpen && state.activeView === "library") {
+        closeLibrary();
       } else {
         hideExplainMenu();
       }
       if (languageWasOpen) elements.languageButton.focus();
     }
+  });
+
+  chrome.storage?.onChanged?.addListener((changes, areaName) => {
+    if (
+      areaName !== "local" ||
+      !changes?.[SkimlineCollections.CLIPPINGS_STORAGE_KEY]
+    ) {
+      return;
+    }
+    const store = SkimlineCollections.normalizeClippingsStore(
+      changes[SkimlineCollections.CLIPPINGS_STORAGE_KEY].newValue,
+    );
+    state.clippings = store.items;
+    state.clippingsRevision = store.revision;
+    state.libraryError = "";
+    updateLibraryCount();
+    if (state.activeView === "library") renderLibrary();
   });
 
   (async () => {
@@ -2359,6 +3132,7 @@
       // 文字设置读取失败时使用 100%，不阻塞 Side Panel。
     }
     updateLanguageControl();
+    void loadClippings();
     useActiveTab();
   })();
 })();

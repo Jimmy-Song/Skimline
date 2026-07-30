@@ -1,20 +1,102 @@
 "use strict";
 
-importScripts("generation-utils.js");
+importScripts("generation-utils.js", "collection-utils.js");
 
 const DEFAULT_BASE_URL = "https://api.deepseek.com";
 const MAX_CONCURRENT_GENERATIONS = 2;
 const TASK_TTL_MS = 24 * 60 * 60 * 1000;
+const EXPLANATION_TASK_TTL_MS = 2 * 60 * 60 * 1000;
+const EXPLANATION_TASK_STORAGE_PREFIX = "context-explanation-task:";
+const MAX_CONCURRENT_EXPLANATIONS = 2;
+const MAX_EXPLANATION_TURNS = 3;
 const CONTENT_MESSAGE_SOURCE = "youtube-viewpoint-map";
 const activeGenerations = new Map();
 const taskRecords = new Map();
 const queuedTaskKeys = [];
 const overviewJobs = new Map();
 const explanationControllers = new Map();
+const explanationTasks = new Map();
+const explanationTaskFingerprints = new Map();
+const queuedExplanationTaskIds = [];
+const explanationTaskControllers = new Map();
+let explanationTasksRestorePromise = null;
+let clippingMutationQueue = Promise.resolve();
 
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch(() => {});
+
+async function readClippingsStore() {
+  const key = SkimlineCollections.CLIPPINGS_STORAGE_KEY;
+  const stored = await chrome.storage.local.get(key);
+  return SkimlineCollections.normalizeClippingsStore(stored[key]);
+}
+
+function queueClippingMutation(operation) {
+  const pending = clippingMutationQueue
+    .catch(() => undefined)
+    .then(async () => operation(await readClippingsStore()));
+  clippingMutationQueue = pending.then(
+    () => undefined,
+    () => undefined,
+  );
+  return pending;
+}
+
+async function persistClippingsStore(store) {
+  await chrome.storage.local.set({
+    [SkimlineCollections.CLIPPINGS_STORAGE_KEY]: store,
+  });
+}
+
+function saveClipping(input) {
+  return queueClippingMutation(async (store) => {
+    const clipping = SkimlineCollections.createClipping(input);
+    const result = SkimlineCollections.addClipping(store, clipping);
+    if (result.limitReached) {
+      throw new Error(
+        `洞见库已达到 ${SkimlineCollections.MAX_CLIPPINGS} 条，请先删除一些旧收藏`,
+      );
+    }
+    if (!result.duplicate) await persistClippingsStore(result.store);
+    return {
+      item: result.item,
+      duplicate: result.duplicate,
+      count: result.store.items.length,
+      revision: result.store.revision,
+    };
+  });
+}
+
+function deleteClipping(id) {
+  return queueClippingMutation(async (store) => {
+    const result = SkimlineCollections.removeClipping(store, id);
+    if (result.deletedItem) await persistClippingsStore(result.store);
+    return {
+      deletedItem: result.deletedItem,
+      count: result.store.items.length,
+      revision: result.store.revision,
+    };
+  });
+}
+
+function restoreDeletedClipping(item) {
+  return queueClippingMutation(async (store) => {
+    const result = SkimlineCollections.restoreClipping(store, item);
+    if (result.limitReached) {
+      throw new Error(
+        `洞见库已达到 ${SkimlineCollections.MAX_CLIPPINGS} 条，无法撤销删除`,
+      );
+    }
+    if (!result.duplicate) await persistClippingsStore(result.store);
+    return {
+      item: result.item,
+      duplicate: result.duplicate,
+      count: result.store.items.length,
+      revision: result.store.revision,
+    };
+  });
+}
 
 function taskKeyFor(videoId, targetLanguage) {
   return [
@@ -104,6 +186,502 @@ async function broadcast(message) {
   } catch {
     // Side Panel 关闭不影响任务继续。
   }
+}
+
+function explanationStorageArea() {
+  return chrome.storage.session || chrome.storage.local;
+}
+
+function explanationStorageKey(taskId) {
+  return `${EXPLANATION_TASK_STORAGE_PREFIX}${taskId}`;
+}
+
+function hashExplanationFingerprint(value) {
+  let hash = 2166136261;
+  for (const character of String(value || "")) {
+    hash ^= character.codePointAt(0);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
+
+function explanationFingerprint(payload, selectedText, targetLanguage) {
+  return [
+    String(payload?.videoId || ""),
+    targetLanguage,
+    selectedText.toLocaleLowerCase(),
+    Number.isFinite(Number(payload?.anchorT))
+      ? Math.floor(Number(payload.anchorT))
+      : "",
+  ].join("\u001f");
+}
+
+function limitedExplanationText(value, maxChars) {
+  return [...String(value || "").trim()].slice(0, maxChars).join("");
+}
+
+function prepareExplanationContext(payload) {
+  const selectedText = YouTubeSummary.normalizeExplanationSelection(
+    payload?.selectedText,
+  );
+  const segments = Array.isArray(payload?.segments) ? payload.segments : [];
+  if (segments.length) {
+    return {
+      context: YouTubeSummary.buildExplanationContext(payload),
+      noTranscript: false,
+      selectedText,
+    };
+  }
+  const anchorT = Number(payload?.anchorT);
+  return {
+    context: {
+      selectedText,
+      question: "",
+      anchorContext: limitedExplanationText(payload?.anchorContext, 1200),
+      videoOutline: limitedExplanationText(payload?.videoOutline, 8000),
+      anchorT:
+        Number.isFinite(anchorT) && anchorT >= 0
+          ? Math.floor(anchorT)
+          : null,
+      localSegments: [],
+      relevantSegments: [],
+      evidenceSegments: [],
+    },
+    noTranscript: true,
+    selectedText,
+  };
+}
+
+function explanationTaskSnapshot(task) {
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    videoId: task.videoId,
+    targetLanguage: task.targetLanguage,
+    sourceLang: task.sourceLang,
+    selection: task.selection,
+    result: task.result,
+    history: task.history,
+    turns: task.turns,
+    pendingQuestion: task.pendingQuestion,
+    dismissed: task.dismissed,
+    noTranscript: task.noTranscript,
+    error: task.error,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
+}
+
+function serializeExplanationTask(task) {
+  return {
+    ...explanationTaskSnapshot(task),
+    fingerprint: task.fingerprint,
+    clientId: task.clientId,
+    context: task.context,
+    operationAttempts: task.operationAttempts,
+  };
+}
+
+async function persistExplanationTask(task) {
+  task.updatedAt = Date.now();
+  await explanationStorageArea().set({
+    [explanationStorageKey(task.taskId)]: serializeExplanationTask(task),
+  });
+}
+
+function removeQueuedExplanationTask(taskId) {
+  let index = queuedExplanationTaskIds.indexOf(taskId);
+  while (index >= 0) {
+    queuedExplanationTaskIds.splice(index, 1);
+    index = queuedExplanationTaskIds.indexOf(taskId);
+  }
+}
+
+async function removeExplanationTask(task) {
+  explanationTasks.delete(task.taskId);
+  if (explanationTaskFingerprints.get(task.fingerprint) === task.taskId) {
+    explanationTaskFingerprints.delete(task.fingerprint);
+  }
+  removeQueuedExplanationTask(task.taskId);
+  await explanationStorageArea().remove(explanationStorageKey(task.taskId));
+}
+
+function explanationTaskFromStored(stored) {
+  if (
+    !stored?.taskId ||
+    !stored?.videoId ||
+    !stored?.targetLanguage ||
+    !stored?.fingerprint ||
+    !stored?.context
+  ) {
+    return null;
+  }
+  if (
+    Date.now() - Number(stored.updatedAt || 0) >
+    EXPLANATION_TASK_TTL_MS
+  ) {
+    return null;
+  }
+  const wasActive = ["queued", "running", "recovering"].includes(
+    stored.status,
+  );
+  const operationAttempts = Math.max(
+    0,
+    Number(stored.operationAttempts) || 0,
+  );
+  return {
+    ...stored,
+    status:
+      wasActive && operationAttempts < 2
+        ? "queued"
+        : wasActive
+          ? "failed"
+          : String(stored.status || "failed"),
+    history: Array.isArray(stored.history) ? stored.history.slice(-7) : [],
+    turns: Math.max(0, Math.min(MAX_EXPLANATION_TURNS, Number(stored.turns) || 0)),
+    pendingQuestion: String(stored.pendingQuestion || ""),
+    dismissed: Boolean(stored.dismissed),
+    noTranscript: Boolean(stored.noTranscript),
+    result: stored.result || null,
+    error:
+      wasActive && operationAttempts >= 2
+        ? "解释任务恢复失败，请重新发起"
+        : String(stored.error || ""),
+    operationAttempts,
+  };
+}
+
+async function ensureExplanationTasksRestored() {
+  if (explanationTasksRestorePromise) return explanationTasksRestorePromise;
+  explanationTasksRestorePromise = (async () => {
+    const stored = await explanationStorageArea().get(null);
+    const expiredKeys = [];
+    for (const [key, value] of Object.entries(stored || {})) {
+      if (!key.startsWith(EXPLANATION_TASK_STORAGE_PREFIX)) continue;
+      const task = explanationTaskFromStored(value);
+      if (!task) {
+        expiredKeys.push(key);
+        continue;
+      }
+      explanationTasks.set(task.taskId, task);
+      explanationTaskFingerprints.set(task.fingerprint, task.taskId);
+      if (task.status === "queued") queuedExplanationTaskIds.push(task.taskId);
+    }
+    if (expiredKeys.length) {
+      await explanationStorageArea().remove(expiredKeys);
+    }
+    dispatchExplanationTasks();
+  })();
+  return explanationTasksRestorePromise;
+}
+
+function mergeExplanationEvidence(current, next) {
+  const seen = new Set();
+  return [...(current || []), ...(next || [])]
+    .filter((item) => {
+      const timestamp = Number(item?.t);
+      if (!Number.isFinite(timestamp) || seen.has(timestamp)) return false;
+      seen.add(timestamp);
+      return true;
+    })
+    .slice(0, 3);
+}
+
+function normalizeNoTranscriptExplanation(result) {
+  return {
+    ...result,
+    inVideo: "",
+    evidence: [],
+    uncertain: true,
+    notice:
+      "未能读取完整字幕，当前仅提供通用解释，无法确认讲者在视频中的具体用法。",
+  };
+}
+
+async function finishExplanationTask(task, updates) {
+  Object.assign(task, updates);
+  await persistExplanationTask(task);
+  await broadcast({
+    type: "CONTEXT_EXPLANATION_TASK_UPDATED",
+    task: explanationTaskSnapshot(task),
+  });
+}
+
+async function runExplanationTask(task) {
+  if (
+    explanationTaskControllers.has(task.taskId) ||
+    task.status !== "queued"
+  ) {
+    return;
+  }
+  const controller = new AbortController();
+  explanationTaskControllers.set(task.taskId, controller);
+  task.status = "running";
+  task.error = "";
+  task.operationAttempts += 1;
+  try {
+    await persistExplanationTask(task);
+    await broadcast({
+      type: "CONTEXT_EXPLANATION_TASK_UPDATED",
+      task: explanationTaskSnapshot(task),
+    });
+    const { deepseek_api_key: apiKey } =
+      await chrome.storage.local.get("deepseek_api_key");
+    const question = String(task.pendingQuestion || "");
+    const context = { ...task.context, question };
+    let result = await YouTubeSummary.requestContextExplanation(
+      {
+        sourceLang: task.sourceLang,
+        history: task.history,
+      },
+      context,
+      {
+        apiKey,
+        baseUrl: DEFAULT_BASE_URL,
+        targetLanguage: task.targetLanguage,
+        signal: controller.signal,
+      },
+    );
+    if (controller.signal.aborted || task.status === "cancelled") {
+      throw new Error("解释已取消");
+    }
+    if (task.noTranscript) result = normalizeNoTranscriptExplanation(result);
+    if (question) {
+      task.history = [
+        ...task.history,
+        { role: "user", content: question },
+        { role: "assistant", content: String(result.answer || "") },
+      ].slice(-7);
+      task.turns = Math.min(MAX_EXPLANATION_TURNS, task.turns + 1);
+      task.result = {
+        ...task.result,
+        evidence: mergeExplanationEvidence(
+          task.result?.evidence,
+          result.evidence,
+        ),
+        suggestedQuestions: result.suggestedQuestions,
+        uncertain: Boolean(task.result?.uncertain || result.uncertain),
+        notice: result.notice || task.result?.notice || "",
+      };
+    } else {
+      task.result = result;
+      task.history = [
+        {
+          role: "assistant",
+          content: [result.simple, result.inVideo].filter(Boolean).join("\n\n"),
+        },
+      ];
+    }
+    task.pendingQuestion = "";
+    task.operationAttempts = 0;
+    await finishExplanationTask(task, {
+      status: "complete",
+      error: "",
+    });
+  } catch (error) {
+    if (controller.signal.aborted || task.status === "cancelled") {
+      if (task.status !== "cancelled") {
+        await finishExplanationTask(task, {
+          status: "cancelled",
+          pendingQuestion: "",
+          error: "",
+        });
+      }
+    } else {
+      await finishExplanationTask(task, {
+        status: "failed",
+        error: error?.message || "解释失败，请重试",
+      });
+    }
+  } finally {
+    explanationTaskControllers.delete(task.taskId);
+    dispatchExplanationTasks();
+  }
+}
+
+function dispatchExplanationTasks() {
+  while (
+    explanationTaskControllers.size < MAX_CONCURRENT_EXPLANATIONS &&
+    queuedExplanationTaskIds.length
+  ) {
+    const taskId = queuedExplanationTaskIds.shift();
+    const task = explanationTasks.get(taskId);
+    if (!task || task.status !== "queued") continue;
+    void runExplanationTask(task);
+  }
+}
+
+function queueExplanationTask(task) {
+  removeQueuedExplanationTask(task.taskId);
+  queuedExplanationTaskIds.push(task.taskId);
+  dispatchExplanationTasks();
+}
+
+async function cancelExplanationTask(task, reason = "cancelled") {
+  if (!task) return;
+  removeQueuedExplanationTask(task.taskId);
+  task.status = "cancelled";
+  task.pendingQuestion = "";
+  task.error = "";
+  task.cancelReason = limitedExplanationText(reason, 120);
+  explanationTaskControllers.get(task.taskId)?.abort();
+  await persistExplanationTask(task);
+  await broadcast({
+    type: "CONTEXT_EXPLANATION_TASK_UPDATED",
+    task: explanationTaskSnapshot(task),
+  });
+}
+
+async function startContextExplanation(payload) {
+  await ensureExplanationTasksRestored();
+  const videoId = String(payload?.videoId || "").trim();
+  const clientId = limitedExplanationText(payload?.clientId, 128);
+  if (!videoId) throw new Error("当前视频信息已失效");
+  if (!clientId) throw new Error("解释会话信息无效");
+  const targetLanguage = YouTubeSummary.normalizeSummaryLanguage(
+    payload?.targetLanguage,
+  );
+  const prepared = prepareExplanationContext(payload);
+  const fingerprint = explanationFingerprint(
+    payload,
+    prepared.selectedText,
+    targetLanguage,
+  );
+  const existingTaskId = explanationTaskFingerprints.get(fingerprint);
+  const existing = existingTaskId
+    ? explanationTasks.get(existingTaskId)
+    : null;
+  if (
+    existing &&
+    !["cancelled", "expired"].includes(existing.status)
+  ) {
+    existing.clientId = clientId;
+    existing.dismissed = false;
+    if (existing.status === "failed") {
+      existing.status = "queued";
+      existing.error = "";
+      existing.operationAttempts = 0;
+      await persistExplanationTask(existing);
+      queueExplanationTask(existing);
+    } else {
+      await persistExplanationTask(existing);
+    }
+    return explanationTaskSnapshot(existing);
+  }
+  for (const task of explanationTasks.values()) {
+    if (
+      task.clientId === clientId &&
+      task.fingerprint !== fingerprint &&
+      ["queued", "running", "recovering"].includes(task.status)
+    ) {
+      await cancelExplanationTask(task, "superseded");
+    }
+  }
+  const now = Date.now();
+  const taskId = `exp-${now.toString(36)}-${hashExplanationFingerprint(
+    `${fingerprint}:${now}:${Math.random()}`,
+  )}`;
+  const task = {
+    taskId,
+    fingerprint,
+    clientId,
+    videoId,
+    targetLanguage,
+    sourceLang: limitedExplanationText(payload?.sourceLang, 64),
+    selection: {
+      selectedText: prepared.selectedText,
+      videoId,
+      videoTitle: limitedExplanationText(payload?.videoTitle, 500),
+      anchorT: prepared.context.anchorT,
+      anchorContext: prepared.context.anchorContext,
+      sourceType: limitedExplanationText(payload?.sourceType, 40) || "claim",
+      pointText: limitedExplanationText(payload?.pointText, 1200),
+      sectionTitle: limitedExplanationText(payload?.sectionTitle, 500),
+    },
+    context: prepared.context,
+    noTranscript: prepared.noTranscript,
+    status: "queued",
+    result: null,
+    history: [],
+    turns: 0,
+    pendingQuestion: "",
+    dismissed: false,
+    error: "",
+    operationAttempts: 0,
+    createdAt: now,
+    updatedAt: now,
+  };
+  explanationTasks.set(taskId, task);
+  explanationTaskFingerprints.set(fingerprint, taskId);
+  await persistExplanationTask(task);
+  queueExplanationTask(task);
+  return explanationTaskSnapshot(task);
+}
+
+async function askContextExplanation(payload) {
+  await ensureExplanationTasksRestored();
+  const task = explanationTasks.get(String(payload?.taskId || ""));
+  if (!task) throw new Error("解释会话已失效，请重新圈选内容");
+  const question = YouTubeSummary.normalizeExplanationSelection(
+    payload?.question,
+    "问题",
+  );
+  const expectedTurn = Math.max(0, Number(payload?.expectedTurn) || 0);
+  if (
+    ["queued", "running", "recovering"].includes(task.status) &&
+    task.pendingQuestion === question
+  ) {
+    return explanationTaskSnapshot(task);
+  }
+  if (!task.result) throw new Error("请等待首轮解释完成");
+  if (task.turns >= MAX_EXPLANATION_TURNS) {
+    throw new Error("这次解释已完成 3 轮追问");
+  }
+  if (task.turns !== expectedTurn) {
+    return explanationTaskSnapshot(task);
+  }
+  if (!["complete", "failed"].includes(task.status)) {
+    throw new Error("上一轮问题仍在回答中");
+  }
+  task.pendingQuestion = question;
+  task.status = "queued";
+  task.dismissed = false;
+  task.error = "";
+  task.operationAttempts = 0;
+  await persistExplanationTask(task);
+  queueExplanationTask(task);
+  return explanationTaskSnapshot(task);
+}
+
+async function getContextExplanationTask(message) {
+  await ensureExplanationTasksRestored();
+  const taskId = String(message?.taskId || "");
+  if (taskId) {
+    const task = explanationTasks.get(taskId);
+    return task ? explanationTaskSnapshot(task) : null;
+  }
+  const videoId = String(message?.videoId || "");
+  const targetLanguage = YouTubeSummary.normalizeSummaryLanguage(
+    message?.targetLanguage,
+  );
+  const tasks = [...explanationTasks.values()]
+    .filter(
+      (task) =>
+        task.videoId === videoId &&
+        task.targetLanguage === targetLanguage &&
+        !["cancelled", "expired"].includes(task.status),
+    )
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+  return tasks[0] ? explanationTaskSnapshot(tasks[0]) : null;
+}
+
+async function dismissContextExplanation(taskId) {
+  await ensureExplanationTasksRestored();
+  const task = explanationTasks.get(String(taskId || ""));
+  if (!task) return null;
+  task.dismissed = true;
+  await persistExplanationTask(task);
+  return explanationTaskSnapshot(task);
 }
 
 function attachOverviewSubscriber(job, tabId) {
@@ -779,19 +1357,44 @@ async function readPlayerCaptionTracks(message, sender) {
     throw new Error("字幕请求来源无效，请刷新 YouTube 页面后重试");
   }
 
-  let senderUrl;
+  const parseYouTubeUrl = (value) => {
+    try {
+      const parsed = new URL(String(value || ""));
+      const hostname = parsed.hostname.toLowerCase();
+      if (
+        (parsed.protocol !== "https:" && parsed.protocol !== "http:") ||
+        (hostname !== "youtube.com" &&
+          !hostname.endsWith(".youtube.com"))
+      ) {
+        return null;
+      }
+      return parsed;
+    } catch {
+      return null;
+    }
+  };
+
+  // sender.url belongs to the content-script document and can keep the old
+  // video URL after a YouTube SPA navigation. Use it only to authenticate the
+  // sender's page; the live tab and MAIN-world player verify the video itself.
+  const senderUrl = parseYouTubeUrl(sender.url || sender.origin);
+  if (!senderUrl) {
+    throw new Error("字幕请求来源无效，请刷新 YouTube 页面后重试");
+  }
+
+  let currentTab;
   try {
-    senderUrl = new URL(String(sender.url || sender.tab?.url || ""));
+    currentTab = await chrome.tabs.get(tabId);
   } catch {
     throw new Error("无法确认当前 YouTube 视频页面");
   }
-  const senderHostname = senderUrl.hostname.toLowerCase();
-  if (
-    (senderHostname !== "youtube.com" &&
-      !senderHostname.endsWith(".youtube.com")) ||
-    senderUrl.pathname !== "/watch" ||
-    senderUrl.searchParams.get("v") !== requestedVideoId
-  ) {
+  const currentTabUrl = parseYouTubeUrl(
+    currentTab?.url || sender.tab?.url,
+  );
+  if (!currentTabUrl || currentTabUrl.pathname !== "/watch") {
+    throw new Error("无法确认当前 YouTube 视频页面");
+  }
+  if (currentTabUrl.searchParams.get("v") !== requestedVideoId) {
     throw new Error("视频已切换，已取消旧字幕请求");
   }
 
@@ -847,6 +1450,60 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .get("deepseek_api_key")
       .then((result) => sendResponse({ ok: true, configured: Boolean(result.deepseek_api_key) }))
       .catch((error) => sendResponse({ ok: false, error: error?.message || "读取设置失败" }));
+    return true;
+  }
+
+  if (message?.type === "LIST_CLIPPINGS") {
+    readClippingsStore()
+      .then((store) =>
+        sendResponse({
+          ok: true,
+          items: store.items,
+          revision: store.revision,
+        }),
+      )
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "读取洞见库失败",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "SAVE_CLIPPING") {
+    saveClipping(message.payload)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "收藏失败，请重试",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "DELETE_CLIPPING") {
+    deleteClipping(message.id)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "删除收藏失败",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "RESTORE_CLIPPING") {
+    restoreDeletedClipping(message.item)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "撤销删除失败",
+        }),
+      );
     return true;
   }
 
@@ -957,7 +1614,72 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "START_CONTEXT_EXPLANATION") {
+    startContextExplanation(message.payload)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "解释失败，请重试",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "ASK_CONTEXT_EXPLANATION") {
+    askContextExplanation(message.payload)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "回答失败，请重试",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "GET_CONTEXT_EXPLANATION_TASK") {
+    getContextExplanationTask(message)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "读取解释任务失败",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "DISMISS_CONTEXT_EXPLANATION") {
+    dismissContextExplanation(message.taskId)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "收起解释失败",
+        }),
+      );
+    return true;
+  }
+
   if (message?.type === "CANCEL_CONTEXT_EXPLANATION") {
+    if (message.taskId) {
+      ensureExplanationTasksRestored()
+        .then(() =>
+          cancelExplanationTask(
+            explanationTasks.get(String(message.taskId)),
+            message.reason,
+          ),
+        )
+        .then(() => sendResponse({ ok: true }))
+        .catch((error) =>
+          sendResponse({
+            ok: false,
+            error: error?.message || "取消解释失败",
+          }),
+        );
+      return true;
+    }
     const clientId = String(message.clientId || "");
     explanationControllers.get(clientId)?.abort();
     explanationControllers.delete(clientId);
