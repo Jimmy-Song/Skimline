@@ -12,6 +12,10 @@ test("当前版本发布包完整、可解压且不包含旧页面注入脚本",
   const manifest = JSON.parse(
     fs.readFileSync(path.join(root, "manifest.json"), "utf8"),
   );
+  const packageJson = JSON.parse(
+    fs.readFileSync(path.join(root, "package.json"), "utf8"),
+  );
+  assert.equal(packageJson.version, manifest.version);
   const releaseName = `skimline-${manifest.version}`;
   const archive = path.join(
     root,

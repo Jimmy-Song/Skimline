@@ -215,6 +215,17 @@
     });
   }
 
+  async function seekWithFeedback(t) {
+    try {
+      const response = await tabMessage({ type: "SEEK", t });
+      if (!response?.ok) {
+        throw new Error(response?.error || "视频跳转失败");
+      }
+    } catch (error) {
+      showToast(error?.message || "视频跳转失败");
+    }
+  }
+
   function resolveTargetLanguage(setting = state.languageSetting) {
     const requested = setting === "auto" ? navigator.language : setting;
     return normalizeTargetLanguage(requested);
@@ -1039,15 +1050,8 @@
         `▶ 查看依据 · ${item.label}`,
       );
       button.type = "button";
-      button.addEventListener("click", async () => {
-        try {
-          const response = await tabMessage({ type: "SEEK", t: item.t });
-          if (!response?.ok) {
-            throw new Error(response?.error || "视频跳转失败");
-          }
-        } catch (error) {
-          showToast(error?.message || "视频跳转失败");
-        }
+      button.addEventListener("click", () => {
+        void seekWithFeedback(item.t);
       });
       group.append(button);
     }
@@ -2090,10 +2094,9 @@
     seek.type = "button";
     seek.className = "yvpm-seek";
     seek.textContent = "▶ 看这段";
-    seek.addEventListener("click", async (event) => {
+    seek.addEventListener("click", (event) => {
       event.stopPropagation();
-      const response = await tabMessage({ type: "SEEK", t: point.t });
-      if (!response?.ok) throw new Error(response?.error || "视频跳转失败");
+      void seekWithFeedback(point.t);
     });
     return seek;
   }
@@ -2245,9 +2248,8 @@
       setSectionExpanded(view, body.hidden);
       updateNowPlaying({ follow: false });
     });
-    range.addEventListener("click", async () => {
-      const response = await tabMessage({ type: "SEEK", t: group.startT });
-      if (!response?.ok) throw new Error(response?.error || "视频跳转失败");
+    range.addEventListener("click", () => {
+      void seekWithFeedback(group.startT);
     });
 
     header.append(toggle, range);

@@ -26,9 +26,15 @@ test("Manifest V3 声明 Side Panel 且不请求多余高权限", () => {
     "Skim any long YouTube video into a scannable, jump-anywhere map of its ideas.",
   );
   assert.deepEqual(manifest.permissions, ["storage", "scripting", "sidePanel"]);
+  assert.deepEqual(manifest.host_permissions, [
+    "https://*.youtube.com/*",
+    "https://api.deepseek.com/*",
+  ]);
   assert.ok(manifest.content_scripts[0].js.includes("content.js"));
   assert.ok(manifest.content_scripts[0].js.includes("transcript-utils.js"));
-  assert.deepEqual(manifest.content_scripts[0].matches, ["*://*.youtube.com/*"]);
+  assert.deepEqual(manifest.content_scripts[0].matches, [
+    "https://*.youtube.com/*",
+  ]);
   assert.equal(manifest.content_scripts[0].css, undefined);
   assert.equal(manifest.web_accessible_resources, undefined);
   assert.equal(manifest.minimum_chrome_version, "114");
@@ -121,6 +127,7 @@ test("内容脚本保留字幕兜底并作为视频消息桥", () => {
   assert.doesNotMatch(source, /runtime\.getURL\(["']injected\.js["']\)/);
   assert.doesNotMatch(source, /window\.postMessage/);
   assert.doesNotMatch(source, /yvpm-trigger|createShell|TOGGLE_PANEL/);
+  assert.doesNotMatch(source, /console\.info\([^\n]*带时间戳字幕/);
 });
 
 test("长视频文字记录优先读取已打开面板，再按需打开并关闭原生面板", () => {
@@ -249,6 +256,11 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(source, /setListHeading\("关键章节", `\$\{groups\.length\} 个章节`\)/);
   assert.match(source, /type: "GET_CAPTION_SEGMENTS"/);
   assert.match(source, /type: "SEEK"/);
+  assert.match(
+    source,
+    /async function seekWithFeedback\(t\)[\s\S]*?catch \(error\)[\s\S]*?showToast\(error\?\.message \|\| "视频跳转失败"\)/,
+  );
+  assert.equal(source.match(/seekWithFeedback\(/g)?.length, 4);
   assert.match(source, /message\?\.type === "PLAYBACK_TIME"/);
   assert.match(source, /message\?\.type === "VIDEO_CHANGED"/);
   assert.match(source, /switchToVideo\(message\.videoId/);
@@ -257,7 +269,7 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(source, /collapseExpandedRow\(row\)/);
   assert.match(source, /const DEFAULT_SECTIONS_COLLAPSED = true/);
   assert.match(source, /function createSectionView/);
-  assert.match(source, /type: "SEEK", t: group\.startT/);
+  assert.match(source, /seekWithFeedback\(group\.startT\)/);
   assert.match(source, /yvpm-section-current/);
   assert.match(source, /if \(!sectionBody \|\| !sectionBody\.hidden\)/);
   assert.match(source, /renderSummary\(response\.summary\)/);
