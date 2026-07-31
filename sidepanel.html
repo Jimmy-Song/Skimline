@@ -127,6 +127,10 @@
           <button id="yvpm-match-next" class="yvpm-match-nav" type="button" aria-label="下一个推荐">↓</button>
         </div>
       </div>
+      <div id="yvpm-list-heading" class="yvpm-list-heading" hidden>
+        <strong id="yvpm-list-heading-title">关键章节</strong>
+        <span id="yvpm-list-heading-meta"></span>
+      </div>
       <div id="yvpm-list" role="list"></div>
       <div id="yvpm-progress" class="yvpm-progress" hidden aria-live="polite">
         <span id="yvpm-progress-text"></span>
@@ -175,13 +179,15 @@
       aria-label="所选文字操作"
       hidden
     >
-      <button id="yvpm-save-selection" class="yvpm-explain-menu-primary" type="button" role="menuitem">
-        <span aria-hidden="true">◇</span>收藏
-      </button>
       <button id="yvpm-explain-selection" type="button" role="menuitem">
         <span aria-hidden="true">✦</span>解释
       </button>
-      <button id="yvpm-copy-selection" type="button" role="menuitem">复制</button>
+      <button id="yvpm-save-selection" type="button" role="menuitem">
+        <span aria-hidden="true">◇</span>收藏
+      </button>
+      <button id="yvpm-copy-selection" type="button" role="menuitem">
+        <span aria-hidden="true">□</span>复制
+      </button>
     </div>
     <div
       id="yvpm-explanation-scrim"

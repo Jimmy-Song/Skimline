@@ -218,16 +218,21 @@ test("概览与分区满足克制的三层视觉和吸顶约束", () => {
   );
 });
 
-test("A 分区标题使用中性灰底章节带且不含暖色", () => {
+test("D 分区标题使用随面板背景适配的章节行", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "sidepanel.css"), "utf8");
   assert.match(css, /--surface-1: #f3f2ef;/);
   assert.match(css, /--surface-1: #262522;/);
+  assert.match(css, /--adaptive-hover-fill: color-mix/);
+  assert.match(css, /--adaptive-card-fill: color-mix/);
 
   const headerRule =
     css.match(/\.yvpm-section-header\s*\{[\s\S]*?\}/)?.[0] || "";
   assert.match(headerRule, /border-top: 0\.5px solid var\(--divider\)/);
   assert.match(headerRule, /border-bottom: 0\.5px solid var\(--divider\)/);
-  assert.match(headerRule, /background: var\(--surface-1\)/);
+  assert.match(
+    headerRule,
+    /background: color-mix\(in srgb, var\(--bg-panel\) 98%, var\(--surface-1\)\)/,
+  );
   assert.doesNotMatch(headerRule, /accent-warm|expand-fill|overview-fill/);
 
   const chevronRule =
@@ -245,7 +250,7 @@ test("A 分区标题使用中性灰底章节带且不含暖色", () => {
   const currentRule =
     css.match(/\.yvpm-section-current \.yvpm-section-header\s*\{[\s\S]*?\}/)?.[0] || "";
   assert.match(currentRule, /inset 3px 0 0 var\(--nowplaying-bar\)/);
-  assert.match(currentRule, /background: var\(--surface-1\)/);
+  assert.match(currentRule, /background: var\(--adaptive-card-fill\)/);
   assert.doesNotMatch(currentRule, /accent-warm|expand-fill|overview-fill/);
 });
 
@@ -268,7 +273,7 @@ test("F2 概览占位使用灰色，最终概览从顶部淡入", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "sidepanel.css"), "utf8");
   const pendingRule =
     css.match(/\.yvpm-overview-pending\s*\{[\s\S]*?\}/)?.[0] || "";
-  assert.match(pendingRule, /background: var\(--surface-1\)/);
+  assert.match(pendingRule, /background: var\(--adaptive-muted-fill\)/);
   assert.doesNotMatch(
     pendingRule,
     /accent-warm|expand-fill|overview-fill|nowplaying-bar/,
@@ -278,6 +283,30 @@ test("F2 概览占位使用灰色，最终概览从顶部淡入", () => {
     /\.yvpm-overview-arrive\s*\{[\s\S]*?animation: yvpm-overview-arrive 240ms ease both/,
   );
   assert.match(css, /@keyframes yvpm-overview-arrive/);
+});
+
+test("D 划词操作默认中性且悬停色块从主背景与强调色派生", () => {
+  const html = fs.readFileSync(path.join(__dirname, "..", "sidepanel.html"), "utf8");
+  const css = fs.readFileSync(path.join(__dirname, "..", "sidepanel.css"), "utf8");
+  assert.ok(
+    html.indexOf('id="yvpm-explain-selection"') <
+      html.indexOf('id="yvpm-save-selection"'),
+  );
+  assert.doesNotMatch(html, /yvpm-explain-menu-primary/);
+  assert.match(
+    css,
+    /--adaptive-hover-fill: color-mix\([\s\S]*?var\(--bg-panel\)[\s\S]*?var\(--accent-warm\)/,
+  );
+  const buttonRule =
+    css.match(/\.yvpm-explain-menu button\s*\{[\s\S]*?\}/)?.[0] || "";
+  assert.match(buttonRule, /background: transparent/);
+  assert.match(buttonRule, /color: var\(--text-secondary\)/);
+  const hoverRule =
+    css.match(
+      /\.yvpm-explain-menu button:hover,[\s\S]*?\.yvpm-explain-menu button:focus-visible\s*\{[\s\S]*?\}/,
+    )?.[0] || "";
+  assert.match(hoverRule, /background: var\(--adaptive-hover-fill\)/);
+  assert.match(hoverRule, /color: var\(--accent-warm\)/);
 });
 
 test("F3 超长分区标题与观点只在 CSS 中可见省略", () => {

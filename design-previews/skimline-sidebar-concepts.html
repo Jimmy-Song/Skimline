@@ -1,0 +1,1529 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Skimline 侧边栏设计提案</title>
+    <style>
+      :root {
+        color-scheme: light;
+        --canvas: #e8e9e8;
+        --ink: #171918;
+        --muted: #747a76;
+        --line: rgba(18, 22, 20, 0.11);
+        --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+        --serif: "Noto Serif SC", "Source Han Serif SC", "Songti SC", serif;
+        --mono: "SFMono-Regular", "Roboto Mono", Menlo, Consolas, monospace;
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      html,
+      body {
+        margin: 0;
+        min-height: 100%;
+        background: var(--canvas);
+        color: var(--ink);
+        font-family: var(--sans);
+      }
+
+      body {
+        padding: 38px;
+      }
+
+      button,
+      input {
+        font: inherit;
+      }
+
+      button {
+        color: inherit;
+      }
+
+      .showcase {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(320px, 390px));
+        gap: 24px;
+        justify-content: center;
+      }
+
+      .concept {
+        position: relative;
+        min-width: 0;
+      }
+
+      .concept-label {
+        display: flex;
+        align-items: baseline;
+        justify-content: space-between;
+        min-height: 30px;
+        padding: 0 4px;
+      }
+
+      .concept-label strong {
+        font-size: 12px;
+        letter-spacing: 0.06em;
+      }
+
+      .concept-label span {
+        color: #737774;
+        font: 10px/1 var(--mono);
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+      }
+
+      .sidebar {
+        position: relative;
+        height: 880px;
+        overflow: hidden;
+        border: 1px solid rgba(15, 20, 17, 0.12);
+        border-radius: 18px;
+        background: #fff;
+        box-shadow:
+          0 1px 1px rgba(16, 20, 18, 0.04),
+          0 18px 48px rgba(16, 20, 18, 0.09);
+      }
+
+      .brand-mark {
+        display: inline-grid;
+        place-items: center;
+        width: 22px;
+        height: 22px;
+        font-weight: 850;
+        line-height: 1;
+      }
+
+      .icon-button {
+        display: inline-grid;
+        width: 30px;
+        height: 30px;
+        place-items: center;
+        border: 0;
+        border-radius: 8px;
+        padding: 0;
+        background: transparent;
+      }
+
+      .bookmark-icon {
+        width: 11px;
+        height: 15px;
+        border: 1.5px solid currentColor;
+        border-radius: 2px 2px 1px 1px;
+        clip-path: polygon(0 0, 100% 0, 100% 100%, 50% 76%, 0 100%);
+      }
+
+      .chevron {
+        flex: none;
+        font-size: 15px;
+        line-height: 1;
+      }
+
+      .search-icon {
+        width: 14px;
+        height: 14px;
+        border: 1.6px solid currentColor;
+        border-radius: 50%;
+      }
+
+      .search-icon::after {
+        display: block;
+        width: 5px;
+        height: 1.6px;
+        margin: 10px 0 0 10px;
+        background: currentColor;
+        content: "";
+        transform: rotate(45deg);
+        transform-origin: left center;
+      }
+
+      .selection {
+        border-radius: 2px;
+        padding: 0 2px;
+      }
+
+      .action-bar {
+        position: absolute;
+        z-index: 5;
+        display: flex;
+        align-items: center;
+        white-space: nowrap;
+      }
+
+      .action-bar button {
+        border: 0;
+        cursor: default;
+      }
+
+      /* Concept A — Margin Notes */
+      .a {
+        --a-ink: #20201d;
+        --a-muted: #77756d;
+        --a-paper: #fbfaf6;
+        --a-red: #c64d3c;
+        --a-yellow: #f4d87a;
+        background: var(--a-paper);
+        color: var(--a-ink);
+      }
+
+      .a .topbar {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        align-items: center;
+        height: 60px;
+        border-bottom: 1px solid #dfded7;
+        padding: 0 18px;
+      }
+
+      .a .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font: 700 14px/1 var(--sans);
+      }
+
+      .a .brand-mark {
+        color: var(--a-red);
+        font-size: 19px;
+        transform: rotate(-4deg);
+      }
+
+      .a .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        color: var(--a-muted);
+        font-size: 11px;
+      }
+
+      .a .language {
+        border: 0;
+        border-left: 1px solid #d7d5cd;
+        padding: 2px 0 2px 10px;
+        background: transparent;
+      }
+
+      .a .reading-progress {
+        width: 64%;
+        height: 2px;
+        background: var(--a-red);
+      }
+
+      .a .content {
+        padding: 23px 18px 28px 30px;
+      }
+
+      .a .content::before {
+        position: absolute;
+        top: 92px;
+        bottom: 0;
+        left: 18px;
+        width: 1px;
+        background: #d7d4ca;
+        content: "";
+      }
+
+      .a .eyebrow {
+        margin-bottom: 10px;
+        color: var(--a-red);
+        font: 650 9px/1 var(--mono);
+        letter-spacing: 0.16em;
+        text-transform: uppercase;
+      }
+
+      .a .overview {
+        position: relative;
+        margin: 0;
+        font: 16px/1.88 var(--serif);
+        letter-spacing: 0.01em;
+      }
+
+      .a .overview::before {
+        position: absolute;
+        top: 9px;
+        left: -16px;
+        width: 7px;
+        height: 7px;
+        border: 2px solid var(--a-paper);
+        border-radius: 50%;
+        background: var(--a-red);
+        box-shadow: 0 0 0 1px var(--a-red);
+        content: "";
+      }
+
+      .a .selection {
+        background: linear-gradient(transparent 18%, var(--a-yellow) 18%, var(--a-yellow) 88%, transparent 88%);
+      }
+
+      .a .action-bar {
+        position: relative;
+        width: max-content;
+        margin: 8px 0 0 auto;
+        overflow: hidden;
+        border: 1px solid #cbc9c0;
+        border-radius: 9px;
+        background: #fffefa;
+        box-shadow: 0 8px 22px rgba(40, 35, 25, 0.15);
+      }
+
+      .a .action-bar::after {
+        position: absolute;
+        right: 43px;
+        top: -5px;
+        width: 9px;
+        height: 9px;
+        border-top: 1px solid #cbc9c0;
+        border-left: 1px solid #cbc9c0;
+        background: #fffefa;
+        content: "";
+        transform: rotate(45deg);
+      }
+
+      .a .action-bar button {
+        position: relative;
+        z-index: 1;
+        height: 36px;
+        padding: 0 11px;
+        background: transparent;
+        color: #5b5953;
+        font-size: 11px;
+      }
+
+      .a .action-bar .primary {
+        background: var(--a-red);
+        color: white;
+        font-weight: 700;
+      }
+
+      .a .ask {
+        margin-top: 22px;
+        border-top: 1px solid #dfded7;
+        border-bottom: 1px solid #dfded7;
+        padding: 15px 0 16px;
+      }
+
+      .a .ask-label {
+        margin-bottom: 10px;
+        font: 700 12px/1.4 var(--sans);
+      }
+
+      .a .ask-row {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+
+      .a .ask input {
+        min-width: 0;
+        flex: 1;
+        border: 0;
+        border-bottom: 1px solid #9d9a90;
+        padding: 7px 2px;
+        outline: 0;
+        background: transparent;
+        color: var(--a-ink);
+        font-size: 11px;
+      }
+
+      .a .ask button {
+        border: 1px solid #2a2b27;
+        border-radius: 999px;
+        padding: 7px 12px;
+        background: #2a2b27;
+        color: white;
+        font-size: 10px;
+        font-weight: 700;
+      }
+
+      .a .prompt {
+        margin-top: 11px;
+        color: var(--a-muted);
+        font: 11px/1.55 var(--serif);
+      }
+
+      .a .chapters-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 20px 0 9px;
+      }
+
+      .a .chapters-title strong {
+        font-size: 11px;
+      }
+
+      .a .chapters-title span {
+        color: var(--a-muted);
+        font: 9px/1 var(--mono);
+      }
+
+      .a .chapter {
+        display: grid;
+        grid-template-columns: 45px 1fr 18px;
+        gap: 9px;
+        align-items: start;
+        border-top: 1px solid #e2e0d9;
+        padding: 12px 0;
+      }
+
+      .a .chapter time {
+        padding-top: 2px;
+        color: var(--a-red);
+        font: 9px/1.2 var(--mono);
+      }
+
+      .a .chapter strong {
+        display: block;
+        margin-bottom: 4px;
+        font: 650 12px/1.35 var(--sans);
+      }
+
+      .a .chapter p {
+        margin: 0;
+        color: var(--a-muted);
+        font: 10px/1.55 var(--sans);
+      }
+
+      .a .chapter .chevron {
+        padding-top: 1px;
+        color: #9a978f;
+      }
+
+      /* Concept B — Index Cards */
+      .b {
+        --b-ink: #15202a;
+        --b-muted: #6f7a84;
+        --b-blue: #2d63d7;
+        --b-blue-soft: #eaf0ff;
+        --b-cyan: #85dbd7;
+        background: #f2f5f8;
+        color: var(--b-ink);
+      }
+
+      .b .topbar {
+        height: 96px;
+        padding: 16px 17px 14px;
+        background: #182536;
+        color: white;
+      }
+
+      .b .topbar-main {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .b .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 750;
+      }
+
+      .b .brand-mark {
+        border-radius: 6px;
+        background: var(--b-cyan);
+        color: #142434;
+        font-size: 17px;
+      }
+
+      .b .top-actions {
+        display: flex;
+        gap: 5px;
+        align-items: center;
+        color: #c7d0d8;
+      }
+
+      .b .language {
+        border: 1px solid rgba(255, 255, 255, 0.18);
+        border-radius: 7px;
+        padding: 6px 8px;
+        background: rgba(255, 255, 255, 0.05);
+        color: #e9eef3;
+        font-size: 10px;
+      }
+
+      .b .context-line {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-top: 17px;
+        color: #9eabb8;
+        font-size: 9px;
+      }
+
+      .b .context-line strong {
+        color: var(--b-cyan);
+        font: 600 9px/1 var(--mono);
+      }
+
+      .b .progress {
+        position: absolute;
+        top: 94px;
+        left: 0;
+        width: 38%;
+        height: 2px;
+        background: var(--b-cyan);
+      }
+
+      .b .content {
+        padding: 14px;
+      }
+
+      .b .summary-card {
+        position: relative;
+        border: 1px solid #d9e0e6;
+        border-radius: 13px;
+        padding: 15px 14px 16px;
+        background: #fff;
+        box-shadow: 0 4px 12px rgba(31, 50, 68, 0.04);
+      }
+
+      .b .card-heading {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+      }
+
+      .b .card-heading span:first-child {
+        color: var(--b-blue);
+        font: 700 9px/1 var(--mono);
+        letter-spacing: 0.14em;
+      }
+
+      .b .card-heading span:last-child {
+        color: #9da7b0;
+        font: 9px/1 var(--mono);
+      }
+
+      .b .overview {
+        margin: 0;
+        font: 13px/1.78 var(--sans);
+      }
+
+      .b .selection {
+        background: #cfe6ff;
+        box-shadow: inset 0 -1px 0 #558be8;
+      }
+
+      .b .action-bar {
+        position: relative;
+        width: max-content;
+        margin: 0 10px 0 auto;
+        overflow: hidden;
+        border: 1px solid #24364a;
+        border-radius: 8px;
+        background: #1d2d40;
+        box-shadow: 0 8px 20px rgba(22, 36, 52, 0.22);
+        transform: translateY(-8px);
+      }
+
+      .b .action-bar button {
+        height: 34px;
+        border-right: 1px solid rgba(255, 255, 255, 0.11);
+        padding: 0 10px;
+        background: transparent;
+        color: #cdd7e1;
+        font-size: 10px;
+      }
+
+      .b .action-bar button:last-child {
+        border-right: 0;
+      }
+
+      .b .action-bar .primary {
+        background: var(--b-cyan);
+        color: #172838;
+        font-weight: 800;
+      }
+
+      .b .ask-card {
+        margin-top: 10px;
+        border-radius: 13px;
+        padding: 14px;
+        background: var(--b-blue);
+        color: white;
+      }
+
+      .b .ask-card h2 {
+        margin: 0 0 10px;
+        font-size: 13px;
+      }
+
+      .b .ask-row {
+        display: flex;
+        gap: 6px;
+      }
+
+      .b .ask input {
+        min-width: 0;
+        height: 37px;
+        flex: 1;
+        border: 0;
+        border-radius: 8px;
+        padding: 0 10px;
+        outline: 0;
+        background: rgba(255, 255, 255, 0.94);
+        color: var(--b-ink);
+        font-size: 10px;
+      }
+
+      .b .ask button {
+        width: 39px;
+        border: 0;
+        border-radius: 8px;
+        background: #162538;
+        color: white;
+        font-size: 16px;
+      }
+
+      .b .chips {
+        display: flex;
+        gap: 5px;
+        margin-top: 9px;
+        overflow: hidden;
+      }
+
+      .b .chip {
+        flex: none;
+        border: 1px solid rgba(255, 255, 255, 0.22);
+        border-radius: 999px;
+        padding: 5px 8px;
+        color: #e5edff;
+        font-size: 9px;
+      }
+
+      .b .section-title {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 18px 2px 9px;
+      }
+
+      .b .section-title strong {
+        font-size: 11px;
+      }
+
+      .b .section-title span {
+        color: var(--b-muted);
+        font: 9px/1 var(--mono);
+      }
+
+      .b .chapter {
+        display: grid;
+        grid-template-columns: 38px 1fr auto;
+        gap: 10px;
+        align-items: center;
+        margin-bottom: 6px;
+        border: 1px solid #dbe1e7;
+        border-radius: 10px;
+        padding: 11px;
+        background: #fff;
+      }
+
+      .b .chapter .number {
+        display: grid;
+        width: 34px;
+        height: 34px;
+        place-items: center;
+        border-radius: 8px;
+        background: #edf1f5;
+        color: #71808d;
+        font: 10px/1 var(--mono);
+      }
+
+      .b .chapter.current {
+        border-color: #9bb6f3;
+        box-shadow: inset 3px 0 0 var(--b-blue);
+      }
+
+      .b .chapter.current .number {
+        background: var(--b-blue-soft);
+        color: var(--b-blue);
+      }
+
+      .b .chapter strong {
+        display: block;
+        margin-bottom: 4px;
+        font-size: 11px;
+      }
+
+      .b .chapter time {
+        color: var(--b-muted);
+        font: 9px/1 var(--mono);
+      }
+
+      .b .chapter .chevron {
+        color: #8b98a3;
+      }
+
+      /* Concept C — Filmstrip Timeline */
+      .c {
+        --c-ink: #141414;
+        --c-muted: #76736c;
+        --c-yellow: #ffcf40;
+        --c-red: #f05a3c;
+        background: #f5f3ed;
+        color: var(--c-ink);
+      }
+
+      .c .topbar {
+        position: relative;
+        height: 122px;
+        overflow: hidden;
+        padding: 18px;
+        background: #161616;
+        color: white;
+      }
+
+      .c .topbar::after {
+        position: absolute;
+        right: -18px;
+        bottom: -42px;
+        width: 132px;
+        height: 100px;
+        border: 15px solid rgba(255, 207, 64, 0.92);
+        border-radius: 50%;
+        content: "";
+      }
+
+      .c .topbar-main {
+        position: relative;
+        z-index: 1;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+
+      .c .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 800;
+        letter-spacing: -0.02em;
+      }
+
+      .c .brand-mark {
+        border: 1px solid #555;
+        border-radius: 50%;
+        color: var(--c-yellow);
+      }
+
+      .c .language {
+        border: 0;
+        border-radius: 999px;
+        padding: 7px 10px;
+        background: #2a2a2a;
+        color: #d5d5d5;
+        font-size: 10px;
+      }
+
+      .c .watching {
+        position: relative;
+        z-index: 1;
+        width: 245px;
+        margin-top: 24px;
+      }
+
+      .c .watching-label {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 7px;
+        color: #a9a9a9;
+        font: 8px/1 var(--mono);
+        letter-spacing: 0.12em;
+        text-transform: uppercase;
+      }
+
+      .c .live-dot {
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--c-red);
+        box-shadow: 0 0 0 3px rgba(240, 90, 60, 0.18);
+      }
+
+      .c .watching strong {
+        display: block;
+        overflow: hidden;
+        font-size: 12px;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+      }
+
+      .c .content {
+        padding: 17px 17px 30px;
+      }
+
+      .c .summary-head {
+        display: flex;
+        align-items: end;
+        justify-content: space-between;
+        margin-bottom: 8px;
+      }
+
+      .c .summary-head strong {
+        font-size: 11px;
+      }
+
+      .c .summary-head span {
+        color: var(--c-muted);
+        font: 9px/1 var(--mono);
+      }
+
+      .c .overview {
+        position: relative;
+        margin: 0;
+        border-top: 3px solid var(--c-ink);
+        padding: 12px 0 2px;
+        font: 14px/1.78 var(--serif);
+      }
+
+      .c .selection {
+        background: var(--c-yellow);
+        box-shadow: 2px 0 0 var(--c-yellow), -2px 0 0 var(--c-yellow);
+      }
+
+      .c .action-bar {
+        position: relative;
+        width: max-content;
+        margin: 8px 0 0;
+        border-radius: 999px;
+        padding: 4px;
+        background: #151515;
+        box-shadow: 0 8px 24px rgba(0, 0, 0, 0.24);
+      }
+
+      .c .action-bar button {
+        height: 29px;
+        border-radius: 999px;
+        padding: 0 10px;
+        background: transparent;
+        color: #bdbdbd;
+        font-size: 10px;
+      }
+
+      .c .action-bar .primary {
+        background: var(--c-yellow);
+        color: #171717;
+        font-weight: 800;
+      }
+
+      .c .ask-strip {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 10px;
+        align-items: center;
+        margin-top: 18px;
+        border: 1px solid #d6d2c9;
+        border-radius: 5px;
+        padding: 11px 11px 11px 13px;
+        background: #ece9e1;
+      }
+
+      .c .ask-strip strong {
+        display: block;
+        margin-bottom: 3px;
+        font-size: 11px;
+      }
+
+      .c .ask-strip span {
+        color: var(--c-muted);
+        font-size: 9px;
+      }
+
+      .c .ask-strip button {
+        display: grid;
+        width: 32px;
+        height: 32px;
+        place-items: center;
+        border: 0;
+        border-radius: 50%;
+        background: var(--c-red);
+        color: white;
+        font-size: 16px;
+      }
+
+      .c .timeline-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 19px 0 12px;
+      }
+
+      .c .timeline-head strong {
+        font-size: 11px;
+      }
+
+      .c .timeline-head span {
+        color: var(--c-muted);
+        font: 9px/1 var(--mono);
+      }
+
+      .c .timeline {
+        position: relative;
+        padding-left: 35px;
+      }
+
+      .c .timeline::before {
+        position: absolute;
+        top: 5px;
+        bottom: 8px;
+        left: 11px;
+        width: 2px;
+        background: #d3cfc5;
+        content: "";
+      }
+
+      .c .chapter {
+        position: relative;
+        min-height: 65px;
+        border-bottom: 1px solid #dbd7ce;
+        padding: 1px 0 12px;
+        margin-bottom: 12px;
+      }
+
+      .c .chapter::before {
+        position: absolute;
+        top: 3px;
+        left: -30px;
+        width: 10px;
+        height: 10px;
+        border: 3px solid #f5f3ed;
+        border-radius: 50%;
+        background: #aaa69d;
+        box-shadow: 0 0 0 1px #aaa69d;
+        content: "";
+      }
+
+      .c .chapter.current::before {
+        background: var(--c-red);
+        box-shadow: 0 0 0 1px var(--c-red);
+      }
+
+      .c .chapter time {
+        display: block;
+        margin-bottom: 5px;
+        color: var(--c-red);
+        font: 9px/1 var(--mono);
+      }
+
+      .c .chapter strong {
+        display: block;
+        font-size: 12px;
+        line-height: 1.35;
+      }
+
+      .c .chapter p {
+        margin: 5px 0 0;
+        color: var(--c-muted);
+        font-size: 9px;
+        line-height: 1.45;
+      }
+
+      /* Concept D — Quiet Research Desk */
+      .d {
+        --d-ink: #1a2925;
+        --d-muted: #6f7e79;
+        --d-green: #2a755e;
+        --d-green-soft: #dfeee8;
+        --d-lilac: #dad8f4;
+        background: #f7faf8;
+        color: var(--d-ink);
+      }
+
+      .d .topbar {
+        display: flex;
+        height: 58px;
+        align-items: center;
+        justify-content: space-between;
+        border-bottom: 1px solid #dbe4df;
+        padding: 0 16px;
+        background: rgba(255, 255, 255, 0.78);
+      }
+
+      .d .brand {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 14px;
+        font-weight: 730;
+      }
+
+      .d .brand-mark {
+        border-radius: 7px 7px 2px 7px;
+        background: var(--d-green);
+        color: white;
+        font-size: 15px;
+      }
+
+      .d .top-actions {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        color: var(--d-muted);
+      }
+
+      .d .language {
+        border: 0;
+        padding: 5px 0;
+        background: transparent;
+        color: var(--d-muted);
+        font-size: 10px;
+      }
+
+      .d .tabs {
+        display: grid;
+        grid-template-columns: repeat(3, 1fr);
+        height: 40px;
+        align-items: end;
+        border-bottom: 1px solid #dbe4df;
+        padding: 0 16px;
+        background: #fff;
+      }
+
+      .d .tab {
+        position: relative;
+        height: 39px;
+        padding-top: 14px;
+        color: #82908b;
+        font-size: 10px;
+        text-align: center;
+      }
+
+      .d .tab.active {
+        color: var(--d-green);
+        font-weight: 750;
+      }
+
+      .d .tab.active::after {
+        position: absolute;
+        right: 18px;
+        bottom: -1px;
+        left: 18px;
+        height: 2px;
+        border-radius: 2px 2px 0 0;
+        background: var(--d-green);
+        content: "";
+      }
+
+      .d .content {
+        padding: 16px;
+      }
+
+      .d .overview-card {
+        position: relative;
+        border: 1px solid #d9e4df;
+        border-radius: 14px;
+        padding: 17px 16px 16px;
+        background: #fff;
+        box-shadow: 0 5px 18px rgba(33, 70, 58, 0.04);
+      }
+
+      .d .overview-card::before {
+        position: absolute;
+        top: 16px;
+        bottom: 16px;
+        left: 0;
+        width: 3px;
+        border-radius: 0 4px 4px 0;
+        background: var(--d-green);
+        content: "";
+      }
+
+      .d .eyebrow {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 10px;
+        color: var(--d-green);
+        font-size: 9px;
+        font-weight: 750;
+        letter-spacing: 0.12em;
+      }
+
+      .d .eyebrow span:last-child {
+        color: #9aa7a2;
+        font: 9px/1 var(--mono);
+        letter-spacing: 0;
+      }
+
+      .d .overview {
+        margin: 0;
+        color: #263833;
+        font: 13px/1.82 var(--sans);
+      }
+
+      .d .selection {
+        background: var(--d-lilac);
+        box-shadow: inset 0 -1px 0 #817bb8;
+      }
+
+      .d .action-bar {
+        position: relative;
+        width: max-content;
+        margin: 0 12px 0 auto;
+        gap: 3px;
+        border: 1px solid #d8e1dd;
+        border-radius: 10px;
+        padding: 4px;
+        background: rgba(255, 255, 255, 0.98);
+        box-shadow: 0 10px 25px rgba(25, 54, 45, 0.14);
+        transform: translateY(-7px);
+      }
+
+      .d .action-bar button {
+        display: flex;
+        height: 30px;
+        align-items: center;
+        gap: 5px;
+        border-radius: 7px;
+        padding: 0 9px;
+        background: transparent;
+        color: #68756f;
+        font-size: 10px;
+        transition:
+          background-color 140ms ease,
+          color 140ms ease;
+      }
+
+      .d .action-bar button:hover,
+      .d .action-bar button:focus-visible {
+        outline: 0;
+        background: var(--d-green-soft);
+        color: var(--d-green);
+        font-weight: 750;
+      }
+
+      .d .ask {
+        margin-top: 10px;
+        border: 1px solid #d9e4df;
+        border-radius: 14px;
+        padding: 14px;
+        background: #eef5f2;
+      }
+
+      .d .ask-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 9px;
+      }
+
+      .d .ask-head strong {
+        font-size: 11px;
+      }
+
+      .d .ask-head span {
+        color: var(--d-green);
+        font-size: 9px;
+      }
+
+      .d .ask-row {
+        display: flex;
+        height: 38px;
+        overflow: hidden;
+        border: 1px solid #cfddd7;
+        border-radius: 9px;
+        background: white;
+      }
+
+      .d .ask input {
+        min-width: 0;
+        flex: 1;
+        border: 0;
+        padding: 0 10px;
+        outline: 0;
+        background: transparent;
+        color: var(--d-ink);
+        font-size: 10px;
+      }
+
+      .d .ask button {
+        width: 38px;
+        border: 0;
+        background: var(--d-green);
+        color: white;
+        font-size: 14px;
+      }
+
+      .d .suggestion {
+        margin-top: 9px;
+        color: var(--d-muted);
+        font-size: 9px;
+        line-height: 1.5;
+      }
+
+      .d .section-head {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin: 18px 2px 8px;
+      }
+
+      .d .section-head strong {
+        font-size: 11px;
+      }
+
+      .d .section-head span {
+        color: var(--d-muted);
+        font: 9px/1 var(--mono);
+      }
+
+      .d .chapter {
+        display: grid;
+        grid-template-columns: 1fr auto;
+        gap: 8px;
+        border-bottom: 1px solid #dfe7e3;
+        padding: 12px 3px;
+      }
+
+      .d .chapter-top {
+        display: flex;
+        align-items: center;
+        gap: 7px;
+        margin-bottom: 5px;
+      }
+
+      .d .chapter time {
+        border-radius: 4px;
+        padding: 3px 5px;
+        background: #e6eeea;
+        color: #6f7f79;
+        font: 8px/1 var(--mono);
+      }
+
+      .d .chapter.current time {
+        background: var(--d-green-soft);
+        color: var(--d-green);
+      }
+
+      .d .chapter strong {
+        font-size: 11px;
+      }
+
+      .d .chapter p {
+        margin: 0;
+        color: var(--d-muted);
+        font-size: 9px;
+        line-height: 1.5;
+      }
+
+      .d .chapter .chevron {
+        padding-top: 15px;
+        color: #8c9994;
+      }
+
+      @media (max-width: 1320px) {
+        .showcase {
+          grid-template-columns: repeat(2, minmax(320px, 420px));
+        }
+      }
+
+      @media (max-width: 760px) {
+        body {
+          padding: 20px 12px;
+        }
+
+        .showcase {
+          grid-template-columns: minmax(300px, 420px);
+        }
+      }
+
+      @media (prefers-reduced-motion: no-preference) {
+        .sidebar {
+          transition:
+            transform 180ms ease,
+            box-shadow 180ms ease;
+        }
+
+        .concept:hover .sidebar {
+          transform: translateY(-3px);
+          box-shadow:
+            0 1px 1px rgba(16, 20, 18, 0.04),
+            0 24px 58px rgba(16, 20, 18, 0.13);
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main class="showcase" aria-label="Skimline 侧边栏设计方案">
+      <section class="concept" aria-labelledby="concept-a">
+        <div class="concept-label">
+          <strong id="concept-a">A · 阅读边注</strong>
+          <span>Margin notes</span>
+        </div>
+        <article class="sidebar a">
+          <header class="topbar">
+            <div class="brand"><span class="brand-mark">≋</span><span>Skimline</span></div>
+            <div class="top-actions">
+              <button class="icon-button" aria-label="收藏"><span class="bookmark-icon"></span></button>
+              <span>100%</span>
+              <button class="language">简体中文⌄</button>
+            </div>
+          </header>
+          <div class="reading-progress"></div>
+          <div class="content">
+            <div class="eyebrow">Overview · 19 min read</div>
+            <p class="overview">
+              演讲者指出，当前 AI 编码工具虽能快速生成代码，但无法维护和提升代码库质量，导致软件工厂失败。他通过分析模型训练中缺乏对可维护性的奖励机制，说明仅靠增加循环和工程化无法解决根本问题。最后提出通过前置规划、架构设计和人工代码审查来平衡速度与质量，并介绍了
+              <span class="selection">Human Layer 平台</span>作为解决方案。
+            </p>
+            <div class="action-bar" aria-label="划词操作">
+              <button class="primary">✦ 解释</button>
+              <button>◇ 收藏</button>
+              <button>复制</button>
+            </div>
+            <section class="ask">
+              <div class="ask-label">带着一个问题看视频</div>
+              <div class="ask-row">
+                <input value="" placeholder="输入你最想找到的答案" aria-label="输入问题" />
+                <button>帮我找</button>
+              </div>
+              <div class="prompt">例如：模型为什么无法维护长期代码质量？</div>
+            </section>
+            <div class="chapters-title"><strong>内容边注</strong><span>6 CHAPTERS</span></div>
+            <div class="chapter">
+              <time>00:33</time>
+              <div><strong>软件工厂失败的根源</strong><p>速度提升之后，代码审查质量反而下降。</p></div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <time>02:47</time>
+              <div><strong>模型训练的根本缺陷</strong><p>测试通过并不等同于架构健康。</p></div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <time>11:26</time>
+              <div><strong>强化学习的局限性</strong><p>可维护性的代价要在数月后才会显现。</p></div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <time>15:09</time>
+              <div><strong>重新引入代码审查与规划</strong><p>用前置协调减少后续返工。</p></div>
+              <span class="chevron">›</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="concept" aria-labelledby="concept-b">
+        <div class="concept-label">
+          <strong id="concept-b">B · 索引卡</strong>
+          <span>Index cards</span>
+        </div>
+        <article class="sidebar b">
+          <header class="topbar">
+            <div class="topbar-main">
+              <div class="brand"><span class="brand-mark">≋</span><span>Skimline</span></div>
+              <div class="top-actions">
+                <button class="icon-button" aria-label="收藏"><span class="bookmark-icon"></span></button>
+                <button class="language">简体中文⌄</button>
+              </div>
+            </div>
+            <div class="context-line"><span>AI ENGINEER · VIDEO BRIEF</span><strong>06 / 19:17</strong></div>
+            <div class="progress"></div>
+          </header>
+          <div class="content">
+            <section class="summary-card">
+              <div class="card-heading"><span>核心判断</span><span>01</span></div>
+              <p class="overview">
+                当前 AI 编码工具能快速生成代码，但无法持续维护代码库质量。模型训练奖励“测试通过”，却无法衡量数月后才显现的架构成本。作者主张重新加入前置规划和人工审查，并用
+                <span class="selection">Human Layer</span> 协助团队对齐。
+              </p>
+            </section>
+            <div class="action-bar" aria-label="划词操作">
+              <button class="primary">✦ 解释</button>
+              <button>◇ 收藏</button>
+              <button>复制</button>
+            </div>
+            <section class="ask-card">
+              <h2>你想验证哪个判断？</h2>
+              <div class="ask-row">
+                <input placeholder="输入问题或研究目标" aria-label="输入问题" />
+                <button>→</button>
+              </div>
+              <div class="chips">
+                <span class="chip">失败根因</span>
+                <span class="chip">训练缺陷</span>
+                <span class="chip">规划方法</span>
+              </div>
+            </section>
+            <div class="section-title"><strong>论点索引</strong><span>6 CARDS</span></div>
+            <div class="chapter current">
+              <span class="number">01</span>
+              <div><strong>软件工厂失败的根源</strong><time>00:33—01:13</time></div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <span class="number">02</span>
+              <div><strong>AI 编码工具暴露的问题</strong><time>01:28—02:31</time></div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <span class="number">03</span>
+              <div><strong>模型训练的根本缺陷</strong><time>02:47—03:18</time></div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <span class="number">04</span>
+              <div><strong>传统与智能软件工厂对比</strong><time>03:36—11:12</time></div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <span class="number">05</span>
+              <div><strong>强化学习的局限性</strong><time>11:26—14:45</time></div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <span class="number">06</span>
+              <div><strong>重新引入代码审查与规划</strong><time>15:09—18:18</time></div>
+              <span class="chevron">›</span>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="concept" aria-labelledby="concept-c">
+        <div class="concept-label">
+          <strong id="concept-c">C · 时间胶片</strong>
+          <span>Filmstrip</span>
+        </div>
+        <article class="sidebar c">
+          <header class="topbar">
+            <div class="topbar-main">
+              <div class="brand"><span class="brand-mark">≋</span><span>Skimline</span></div>
+              <button class="language">简体中文⌄</button>
+            </div>
+            <div class="watching">
+              <div class="watching-label"><span class="live-dot"></span><span>Now watching · 05:42</span></div>
+              <strong>Harness Engineering is not Enough</strong>
+            </div>
+          </header>
+          <div class="content">
+            <div class="summary-head"><strong>一句话看懂</strong><span>SUMMARY / 01</span></div>
+            <p class="overview">
+              软件工厂的瓶颈并不只是工程能力，而是模型缺少对长期可维护性的奖励。解决方案不是增加更多循环，而是恢复前置规划、架构设计和人工审查，用
+              <span class="selection">Human Layer</span> 加速团队协作。
+            </p>
+            <div class="action-bar" aria-label="划词操作">
+              <button class="primary">✦ 解释</button>
+              <button>◇ 收藏</button>
+              <button>复制</button>
+            </div>
+            <section class="ask-strip">
+              <div><strong>从视频里找答案</strong><span>说出你的问题，定位到相关片段</span></div>
+              <button>↗</button>
+            </section>
+            <div class="timeline-head"><strong>时间胶片</strong><span>19:17 TOTAL</span></div>
+            <div class="timeline">
+              <div class="chapter current">
+                <time>00:33—01:13</time>
+                <strong>软件工厂失败的根源</strong>
+                <p>我们误把更多产出当成了更高效率。</p>
+              </div>
+              <div class="chapter">
+                <time>01:28—02:31</time>
+                <strong>AI 编码工具暴露的问题</strong>
+                <p>事故和未经审查的 PR 同时增加。</p>
+              </div>
+              <div class="chapter">
+                <time>02:47—03:18</time>
+                <strong>模型训练的根本缺陷</strong>
+                <p>奖励机制只看测试是否通过。</p>
+              </div>
+              <div class="chapter">
+                <time>03:36—11:12</time>
+                <strong>传统与智能软件工厂对比</strong>
+                <p>速度提升后，审核成了真正的瓶颈。</p>
+              </div>
+              <div class="chapter">
+                <time>11:26—14:45</time>
+                <strong>强化学习的局限性</strong>
+                <p>架构成本无法及时反馈给模型。</p>
+              </div>
+            </div>
+          </div>
+        </article>
+      </section>
+
+      <section class="concept" aria-labelledby="concept-d">
+        <div class="concept-label">
+          <strong id="concept-d">D · 安静研究台</strong>
+          <span>Research desk</span>
+        </div>
+        <article class="sidebar d">
+          <header class="topbar">
+            <div class="brand"><span class="brand-mark">≋</span><span>Skimline</span></div>
+            <div class="top-actions">
+              <button class="icon-button" aria-label="收藏"><span class="bookmark-icon"></span></button>
+              <button class="language">简体中文⌄</button>
+            </div>
+          </header>
+          <nav class="tabs" aria-label="内容区域">
+            <span class="tab active">概览</span>
+            <span class="tab">章节</span>
+            <span class="tab">收藏</span>
+          </nav>
+          <div class="content">
+            <section class="overview-card">
+              <div class="eyebrow"><span>概览</span><span>约 1 分钟读完</span></div>
+              <p class="overview">
+                演讲者认为，AI 编码工具可以加快生成速度，却无法持续提升代码库质量。模型训练只奖励测试通过，难以评价几个月后才暴露的架构问题。因此团队仍需保留前置规划和代码审查，并借助
+                <span class="selection">Human Layer 平台</span>缩短对齐过程。
+              </p>
+            </section>
+            <div class="action-bar" aria-label="划词操作">
+              <button class="primary">✦ 解释</button>
+              <button>◇ 收藏</button>
+              <button>复制</button>
+            </div>
+            <section class="ask">
+              <div class="ask-head"><strong>问这期视频</strong><span>AI 定位片段</span></div>
+              <div class="ask-row">
+                <input placeholder="例如：为什么代码质量会持续下降？" aria-label="输入问题" />
+                <button>↑</button>
+              </div>
+              <div class="suggestion">试试问：模型训练为什么难以奖励“可维护性”？</div>
+            </section>
+            <div class="section-head"><strong>关键章节</strong><span>6 SECTIONS</span></div>
+            <div class="chapter current">
+              <div>
+                <div class="chapter-top"><time>00:33</time><strong>软件工厂失败的根源</strong></div>
+                <p>代码产出加速后，新的瓶颈转移到了质量控制。</p>
+              </div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <div>
+                <div class="chapter-top"><time>02:47</time><strong>模型训练的根本缺陷</strong></div>
+                <p>测试通过无法代表程序设计和架构依然健康。</p>
+              </div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <div>
+                <div class="chapter-top"><time>11:26</time><strong>强化学习的局限性</strong></div>
+                <p>可维护性的真实代价很难成为即时反馈。</p>
+              </div>
+              <span class="chevron">›</span>
+            </div>
+            <div class="chapter">
+              <div>
+                <div class="chapter-top"><time>15:09</time><strong>重新引入代码审查与规划</strong></div>
+                <p>让 AI 加速对齐，但最终仍由人对代码负责。</p>
+              </div>
+              <span class="chevron">›</span>
+            </div>
+          </div>
+        </article>
+      </section>
+    </main>
+  </body>
+</html>

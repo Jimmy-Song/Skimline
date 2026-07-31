@@ -11,6 +11,26 @@
   --expand-border: rgba(176, 113, 15, 0.14);
   --overview-fill: rgba(176, 113, 15, 0.035);
   --hover: rgba(176, 113, 15, 0.045);
+  --adaptive-hover-fill: color-mix(
+    in srgb,
+    var(--bg-panel) 88%,
+    var(--accent-warm)
+  );
+  --adaptive-card-fill: color-mix(
+    in srgb,
+    var(--bg-panel) 96%,
+    var(--accent-warm)
+  );
+  --adaptive-muted-fill: color-mix(
+    in srgb,
+    var(--bg-panel) 76%,
+    var(--surface-1)
+  );
+  --adaptive-border: color-mix(
+    in srgb,
+    var(--divider) 72%,
+    var(--accent-warm)
+  );
   --nowplaying-bar: #b0710f;
   --explain-source: #5f7f62;
   --explain-source-fill: #f0f5ef;
@@ -81,8 +101,15 @@ body {
 }
 
 .yvpm-brand-mark {
-  color: var(--accent-warm);
-  font-size: 1.125rem;
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 7px 7px 2px 7px;
+  background: var(--accent-warm);
+  color: var(--bg-panel);
+  font-size: 0.8125rem;
+  font-weight: 800;
 }
 
 .yvpm-brand-name {
@@ -762,9 +789,26 @@ body {
 }
 
 .yvpm-overview {
+  position: relative;
+  margin: 14px 14px 0;
+  overflow: hidden;
+  border: 0.5px solid var(--adaptive-border);
+  border-radius: 14px;
   padding: 15px 16px 16px;
-  background: var(--overview-fill);
-  border-bottom: 0.5px solid var(--divider);
+  background: var(--adaptive-card-fill);
+  box-shadow: 0 5px 18px
+    color-mix(in srgb, var(--text-primary) 4%, transparent);
+}
+
+.yvpm-overview::before {
+  position: absolute;
+  top: 15px;
+  bottom: 15px;
+  left: 0;
+  width: 3px;
+  border-radius: 0 4px 4px 0;
+  background: var(--accent-warm);
+  content: "";
 }
 
 .yvpm-overview-label {
@@ -782,7 +826,7 @@ body {
 }
 
 .yvpm-overview-pending {
-  background: var(--surface-1);
+  background: var(--adaptive-muted-fill);
 }
 
 .yvpm-overview-pending .yvpm-overview-label {
@@ -812,8 +856,11 @@ body {
 }
 
 .yvpm-intent {
-  padding: 15px 16px 16px;
-  border-bottom: 0.5px solid var(--divider);
+  margin: 10px 14px 14px;
+  border: 0.5px solid var(--adaptive-border);
+  border-radius: 14px;
+  padding: 14px;
+  background: var(--adaptive-muted-fill);
 }
 
 .yvpm-intent h2 {
@@ -836,7 +883,7 @@ body {
   border-radius: 9px;
   padding: 0 10px;
   outline: 0;
-  background: var(--bg-panel);
+  background: color-mix(in srgb, var(--bg-panel) 98%, transparent);
   color: var(--text-primary);
   font: 0.71875rem/1.4 var(--font-detail);
 }
@@ -860,6 +907,16 @@ body {
   color: var(--bg-panel);
   cursor: pointer;
   font: 500 0.71875rem/1 var(--font-detail);
+}
+
+.yvpm-intent-form button:hover,
+.yvpm-intent-form button:focus-visible {
+  outline: 0;
+  background: color-mix(
+    in srgb,
+    var(--text-primary) 86%,
+    var(--accent-warm)
+  );
 }
 
 .yvpm-intent-form button:disabled,
@@ -899,7 +956,8 @@ body {
 .yvpm-intent-chip:focus-visible,
 .yvpm-intent-chip-active {
   border-color: var(--expand-border);
-  background: var(--expand-fill);
+  outline: 0;
+  background: var(--adaptive-hover-fill);
   color: var(--accent-warm);
 }
 
@@ -989,8 +1047,33 @@ body {
   background: var(--bg-panel);
 }
 
+.yvpm-list-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin: 18px 16px 8px;
+}
+
+.yvpm-list-heading strong {
+  color: var(--text-primary);
+  font: 600 0.6875rem/1.4 var(--font-detail);
+}
+
+.yvpm-list-heading span {
+  color: var(--text-muted);
+  font: 0.5625rem/1 var(--font-time);
+}
+
+#yvpm-list {
+  padding: 0 14px 24px;
+}
+
 .yvpm-section {
   position: relative;
+}
+
+.yvpm-section + .yvpm-section {
+  margin-top: 4px;
 }
 
 .yvpm-section-header {
@@ -999,11 +1082,18 @@ body {
   z-index: 2;
   display: flex;
   align-items: stretch;
-  min-height: 40px;
+  min-height: 44px;
   border-top: 0.5px solid var(--divider);
   border-bottom: 0.5px solid var(--divider);
-  background: var(--surface-1);
-  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.035);
+  border-radius: 9px;
+  background: color-mix(in srgb, var(--bg-panel) 98%, var(--surface-1));
+  box-shadow: none;
+  transition: background-color 140ms ease;
+}
+
+.yvpm-section-header:hover,
+.yvpm-section-header:focus-within {
+  background: var(--adaptive-hover-fill);
 }
 
 #yvpm-panel.yvpm-has-matches .yvpm-section-header {
@@ -1027,7 +1117,7 @@ body {
   flex: 1;
   align-items: center;
   gap: 7px;
-  padding: 9px 8px 9px 16px;
+  padding: 10px 8px 10px 10px;
   color: var(--text-secondary);
   text-align: left;
 }
@@ -1056,26 +1146,25 @@ body {
 
 .yvpm-section-range {
   flex: none;
-  padding: 9px 16px 9px 8px;
+  padding: 10px 10px 10px 8px;
   color: var(--text-muted);
   font: 0.625rem/1.45 var(--font-time);
 }
 
 .yvpm-section-current .yvpm-section-header {
-  box-shadow:
-    inset 3px 0 0 var(--nowplaying-bar),
-    0 2px 5px rgba(0, 0, 0, 0.035);
-  background: var(--surface-1);
+  box-shadow: inset 3px 0 0 var(--nowplaying-bar);
+  background: var(--adaptive-card-fill);
 }
 
 .yvpm-row {
   border-bottom: 0.5px solid var(--divider);
+  border-radius: 8px;
   transition: background 120ms ease;
 }
 
 .yvpm-row:hover,
 .yvpm-row:focus-within {
-  background: var(--hover);
+  background: var(--adaptive-hover-fill);
 }
 
 .yvpm-row.yvpm-recommended {
@@ -1253,12 +1342,17 @@ html .yvpm-expanded .yvpm-point-toggle .yvpm-claim {
   display: flex;
   align-items: center;
   gap: 3px;
-  border: 0.5px solid rgba(255, 255, 255, 0.12);
-  border-radius: 9px;
+  border: 0.5px solid var(--adaptive-border);
+  border-radius: 10px;
   padding: 4px;
-  background: #252420;
-  color: #f7f4ee;
-  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.24);
+  background: color-mix(
+    in srgb,
+    var(--bg-panel) 96%,
+    var(--surface-1)
+  );
+  color: var(--text-secondary);
+  box-shadow: 0 10px 28px
+    color-mix(in srgb, var(--text-primary) 18%, transparent);
 }
 
 .yvpm-explain-menu::after {
@@ -1267,7 +1361,13 @@ html .yvpm-expanded .yvpm-point-toggle .yvpm-claim {
   left: 50%;
   width: 8px;
   height: 8px;
-  background: #252420;
+  border-right: 0.5px solid var(--adaptive-border);
+  border-bottom: 0.5px solid var(--adaptive-border);
+  background: color-mix(
+    in srgb,
+    var(--bg-panel) 96%,
+    var(--surface-1)
+  );
   content: "";
   transform: translateX(-50%) rotate(45deg);
 }
@@ -1275,34 +1375,38 @@ html .yvpm-expanded .yvpm-point-toggle .yvpm-claim {
 .yvpm-explain-menu.yvpm-explain-menu-below::after {
   top: -4px;
   bottom: auto;
+  border: 0;
+  border-top: 0.5px solid var(--adaptive-border);
+  border-left: 0.5px solid var(--adaptive-border);
 }
 
 .yvpm-explain-menu button {
   position: relative;
   z-index: 1;
+  display: flex;
   height: 29px;
+  align-items: center;
+  gap: 5px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   padding: 0 9px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.72);
+  color: var(--text-secondary);
   cursor: pointer;
   font: 0.65625rem/1 var(--font-detail);
+  transition:
+    background-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
 }
 
 .yvpm-explain-menu button:hover,
 .yvpm-explain-menu button:focus-visible {
   outline: 0;
-  color: white;
-}
-
-.yvpm-explain-menu .yvpm-explain-menu-primary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  background: #e6a338;
-  color: #241a0c;
+  background: var(--adaptive-hover-fill);
+  color: var(--accent-warm);
   font-weight: 600;
+  transform: translateY(-1px);
 }
 
 .yvpm-explanation-scrim {
@@ -1859,7 +1963,9 @@ html .yvpm-expanded .yvpm-point-toggle .yvpm-claim {
 @media (prefers-reduced-motion: reduce) {
   .yvpm-row,
   .yvpm-row-arrive,
+  .yvpm-section-header,
   .yvpm-section-chevron,
+  .yvpm-explain-menu button,
   .yvpm-progress-shimmer,
   .yvpm-overview-arrive,
   .yvpm-spinner,
