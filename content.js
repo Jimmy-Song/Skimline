@@ -121,7 +121,6 @@
     assertCurrentVideo(requestedVideoId);
     if (!segments.length) throw new Error("字幕内容为空，暂时无法生成");
 
-    console.info("[Skimline] 带时间戳字幕", segments);
     const video = document.querySelector("video");
     const result = {
       supported: true,
