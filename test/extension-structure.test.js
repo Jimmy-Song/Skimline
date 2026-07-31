@@ -208,8 +208,12 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(html, /id="yvpm-library"/);
   assert.match(html, /id="yvpm-library-search"/);
   assert.ok(
+    html.indexOf('id="yvpm-explain-selection"') <
+      html.indexOf('id="yvpm-save-selection"'),
+  );
+  assert.ok(
     html.indexOf('id="yvpm-save-selection"') <
-      html.indexOf('id="yvpm-explain-selection"'),
+      html.indexOf('id="yvpm-copy-selection"'),
   );
   assert.ok(
     html.indexOf('src="collection-utils.js"') <
@@ -220,6 +224,9 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(html, /id="yvpm-overview"/);
   assert.match(html, /id="yvpm-intent-form"/);
   assert.match(html, /id="yvpm-matchbar"/);
+  assert.match(html, /id="yvpm-list-heading"/);
+  assert.match(html, /id="yvpm-list-heading-title"/);
+  assert.match(html, /id="yvpm-list-heading-meta"/);
   assert.match(html, /id="yvpm-progress"/);
   assert.match(html, /id="yvpm-language-menu"/);
   assert.match(html, /id="yvpm-prepare"/);
@@ -238,6 +245,8 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.doesNotMatch(html, /<h1\b|yvpm-page-title/);
   assert.match(source, /chrome\.tabs\.query\(\{ active: true, currentWindow: true \}\)/);
   assert.match(source, /function createPointRow/);
+  assert.match(source, /function setListHeading/);
+  assert.match(source, /setListHeading\("关键章节", `\$\{groups\.length\} 个章节`\)/);
   assert.match(source, /type: "GET_CAPTION_SEGMENTS"/);
   assert.match(source, /type: "SEEK"/);
   assert.match(source, /message\?\.type === "PLAYBACK_TIME"/);
@@ -351,6 +360,11 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(css, /\.yvpm-row\.yvpm-recommended/);
   assert.match(css, /\.yvpm-insight-card-header/);
   assert.match(css, /\.yvpm-explain-menu/);
+  assert.match(css, /--adaptive-hover-fill: color-mix/);
+  assert.match(
+    css,
+    /\.yvpm-explain-menu button:hover,[\s\S]*?background: var\(--adaptive-hover-fill\)/,
+  );
   assert.match(css, /\.yvpm-explanation-drawer/);
   assert.match(css, /\.yvpm-explanation-scrim/);
   assert.match(css, /::highlight\(yvpm-explanation-selection\)/);

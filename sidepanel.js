@@ -102,6 +102,9 @@
     panel: document.querySelector("#yvpm-panel"),
     empty: document.querySelector("#yvpm-empty"),
     list: document.querySelector("#yvpm-list"),
+    listHeading: document.querySelector("#yvpm-list-heading"),
+    listHeadingTitle: document.querySelector("#yvpm-list-heading-title"),
+    listHeadingMeta: document.querySelector("#yvpm-list-heading-meta"),
     overview: document.querySelector("#yvpm-overview"),
     overviewLabel: document.querySelector(".yvpm-overview-label"),
     overviewText: document.querySelector("#yvpm-overview-text"),
@@ -2339,7 +2342,15 @@
     }
     elements.list.append(fragment);
     state.points = mergedPoints;
+    setListHeading("关键观点", `${state.points.length} 条观点`);
     updateNowPlaying({ follow: false });
+  }
+
+  function setListHeading(title = "", meta = "") {
+    const visible = Boolean(title);
+    elements.listHeading.hidden = !visible;
+    elements.listHeadingTitle.textContent = title;
+    elements.listHeadingMeta.textContent = meta;
   }
 
   function renderSummary(summary) {
@@ -2372,6 +2383,7 @@
       fragment.append(view.section);
     }
     elements.list.append(fragment);
+    setListHeading("关键章节", `${groups.length} 个章节`);
     renderIntentControls(summary);
     if (elements.overview.hidden) showOverviewError();
     updateNowPlaying({ follow: false });
@@ -2400,6 +2412,7 @@
     elements.intentChips.classList.remove("yvpm-intent-chips-muted");
     setIntentFeedback("");
     setIntentBusy(false);
+    setListHeading();
     elements.list.replaceChildren();
     hideProgress();
   }
