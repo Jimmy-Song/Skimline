@@ -61,6 +61,9 @@
     sectionGroups: [],
     sectionViews: [],
     expandedRow: null,
+    followPlayback: false,
+    followSeekRequestId: 0,
+    autoExpandedSection: null,
     recommendationRequestId: 0,
     recommendationIntent: "",
     recommendationSource: "",
@@ -105,6 +108,7 @@
     listHeading: document.querySelector("#yvpm-list-heading"),
     listHeadingTitle: document.querySelector("#yvpm-list-heading-title"),
     listHeadingMeta: document.querySelector("#yvpm-list-heading-meta"),
+    followPlayback: document.querySelector("#yvpm-follow-playback"),
     overview: document.querySelector("#yvpm-overview"),
     overviewLabel: document.querySelector(".yvpm-overview-label"),
     overviewText: document.querySelector("#yvpm-overview-text"),
@@ -215,13 +219,27 @@
     });
   }
 
-  async function seekWithFeedback(t) {
+  async function seekWithFeedback(t, { followPlayback = false } = {}) {
+    const followRequestId = followPlayback
+      ? ++state.followSeekRequestId
+      : null;
     try {
       const response = await tabMessage({ type: "SEEK", t });
       if (!response?.ok) {
         throw new Error(response?.error || "视频跳转失败");
       }
+      if (followPlayback) {
+        if (followRequestId !== state.followSeekRequestId) return;
+        state.currentTime = Math.max(0, Number(t) || 0);
+        setFollowPlayback(true, { sync: true });
+      }
     } catch (error) {
+      if (
+        followPlayback &&
+        followRequestId !== state.followSeekRequestId
+      ) {
+        return;
+      }
       showToast(error?.message || "视频跳转失败");
     }
   }
@@ -872,6 +890,7 @@
 
   function openLibrary() {
     if (state.activeView === "library") return;
+    setFollowPlayback(false);
     state.summaryScrollTop = window.scrollY;
     state.activeView = "library";
     if (!elements.explanationCard.hidden) closeExplanation();
@@ -1766,6 +1785,13 @@
     });
   }
 
+  function recommendationIsActive() {
+    return Boolean(
+      state.recommendationRows.length ||
+        Array.isArray(state.recommendationPreviousExpanded),
+    );
+  }
+
   function clearRecommendation({
     restoreSections = true,
     clearInput = false,
@@ -1865,6 +1891,7 @@
       return;
     }
 
+    setFollowPlayback(false);
     clearRecommendation({ restoreSections: true });
     state.recommendationPreviousExpanded = state.sectionViews.map(
       (view) => !view.body.hidden,
@@ -1889,6 +1916,7 @@
       return;
     }
 
+    setFollowPlayback(false);
     clearRecommendation({ restoreSections: true, invalidate: false });
     state.recommendationPreviousExpanded = state.sectionViews.map(
       (view) => !view.body.hidden,
@@ -2077,6 +2105,48 @@
     );
   }
 
+  function updateFollowPlaybackControl() {
+    const enabled = state.followPlayback;
+    elements.followPlayback.setAttribute("aria-pressed", String(enabled));
+    elements.followPlayback.setAttribute(
+      "aria-label",
+      enabled ? "跟随播放已开启，点击关闭" : "跟随播放已关闭，点击开启",
+    );
+    elements.followPlayback.title = enabled
+      ? "正在跟随播放，点击关闭"
+      : "点击后从当前播放位置开始跟随";
+  }
+
+  function setFollowPlayback(enabled, { sync = false } = {}) {
+    const nextEnabled = Boolean(enabled);
+    if (nextEnabled && recommendationIsActive()) {
+      clearRecommendation({ restoreSections: true, clearInput: true });
+      setIntentFeedback("");
+    }
+    state.followPlayback = nextEnabled;
+    if (!nextEnabled) {
+      state.followSeekRequestId += 1;
+      state.autoExpandedSection = null;
+    }
+    updateFollowPlaybackControl();
+    if (nextEnabled && sync) {
+      updateNowPlaying({ follow: true, forceFollow: true });
+    }
+  }
+
+  function setExpandedRow(row, expanded) {
+    if (!row) return;
+    const toggle = row.querySelector(".yvpm-point-toggle");
+    const detail = row.querySelector(".yvpm-detail, .yvpm-insight-card");
+    if (!toggle || !detail) return;
+    if (expanded) collapseExpandedRow(row);
+    detail.hidden = !expanded;
+    row.classList.toggle("yvpm-expanded", expanded);
+    toggle.setAttribute("aria-expanded", String(expanded));
+    if (expanded) state.expandedRow = row;
+    else if (state.expandedRow === row) state.expandedRow = null;
+  }
+
   function collapseExpandedRow(except = null) {
     if (!state.expandedRow || state.expandedRow === except) return;
     const toggle = state.expandedRow.querySelector(".yvpm-point-toggle");
@@ -2096,7 +2166,7 @@
     seek.textContent = "▶ 看这段";
     seek.addEventListener("click", (event) => {
       event.stopPropagation();
-      void seekWithFeedback(point.t);
+      void seekWithFeedback(point.t, { followPlayback: true });
     });
     return seek;
   }
@@ -2177,11 +2247,8 @@
         return;
       }
       const expanding = detail.hidden;
-      collapseExpandedRow(row);
-      detail.hidden = !expanding;
-      row.classList.toggle("yvpm-expanded", expanding);
-      toggle.setAttribute("aria-expanded", String(expanding));
-      state.expandedRow = expanding ? row : null;
+      setFollowPlayback(false);
+      setExpandedRow(row, expanding);
     };
     toggle.addEventListener("click", toggleDetail);
     toggle.addEventListener("keydown", (event) => {
@@ -2245,11 +2312,12 @@
 
     const view = { section, toggle, body };
     toggle.addEventListener("click", () => {
+      setFollowPlayback(false);
       setSectionExpanded(view, body.hidden);
       updateNowPlaying({ follow: false });
     });
     range.addEventListener("click", () => {
-      void seekWithFeedback(group.startT);
+      void seekWithFeedback(group.points[0].t, { followPlayback: true });
     });
 
     header.append(toggle, range);
@@ -2257,36 +2325,52 @@
     return view;
   }
 
-  function updateNowPlaying({ follow = true } = {}) {
+  function updateNowPlaying({ follow = true, forceFollow = false } = {}) {
     const rows = elements.list.querySelectorAll(".yvpm-row");
     const index = YouTubeSummary.findCurrentPointIndex(
       state.points,
       state.currentTime,
     );
-    rows.forEach((row, rowIndex) => {
-      row.classList.toggle("yvpm-now-playing", rowIndex === index);
-    });
     const sectionIndex = YouTubeSummary.findCurrentSectionIndex(
       state.sectionGroups,
       state.currentTime,
     );
+    const shouldFollow = Boolean(
+      follow &&
+        state.followPlayback &&
+        !recommendationIsActive() &&
+        index >= 0 &&
+        (forceFollow || index !== state.currentIndex),
+    );
+    const row = shouldFollow ? rows[index] : null;
+    if (row) {
+      const rowSection = row.closest(".yvpm-section");
+      const currentSection =
+        state.sectionViews.find((view) => view.section === rowSection) || null;
+      if (
+        state.autoExpandedSection &&
+        state.autoExpandedSection !== currentSection
+      ) {
+        setSectionExpanded(state.autoExpandedSection, false);
+        state.autoExpandedSection = null;
+      }
+      if (currentSection?.body.hidden) {
+        setSectionExpanded(currentSection, true);
+        state.autoExpandedSection = currentSection;
+      }
+      setExpandedRow(row, true);
+    }
+    rows.forEach((pointRow, rowIndex) => {
+      pointRow.classList.toggle("yvpm-now-playing", rowIndex === index);
+    });
     state.sectionViews.forEach((view, viewIndex) => {
       view.section.classList.toggle(
         "yvpm-section-current",
         viewIndex === sectionIndex,
       );
     });
-    if (
-      follow &&
-      !state.recommendationRows.length &&
-      index >= 0 &&
-      index !== state.currentIndex
-    ) {
-      const row = rows[index];
-      const sectionBody = row?.closest(".yvpm-section-body");
-      if (!sectionBody || !sectionBody.hidden) {
-        row?.scrollIntoView({ block: "nearest", behavior: "smooth" });
-      }
+    if (row) {
+      row.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
     state.currentIndex = index;
     state.currentSectionIndex = sectionIndex;
@@ -2393,6 +2477,7 @@
   }
 
   function clearPoints({ preserveOverview = false } = {}) {
+    setFollowPlayback(false);
     hideExplainMenu();
     if (!state.explanationDrawerOpen) clearCapturedSelection();
     clearRecommendation({ restoreSections: false, clearInput: true });
@@ -2408,6 +2493,7 @@
     state.sectionGroups = [];
     state.sectionViews = [];
     state.expandedRow = null;
+    state.autoExpandedSection = null;
     if (!preserveOverview) clearOverview();
     elements.intent.hidden = true;
     elements.intentChips.replaceChildren();
@@ -2948,6 +3034,11 @@
     event.preventDefault();
     runRecommendation(elements.intentInput.value);
   });
+  elements.followPlayback.addEventListener("click", () => {
+    setFollowPlayback(!state.followPlayback, {
+      sync: !state.followPlayback,
+    });
+  });
   elements.matchClear.addEventListener("click", () => {
     clearRecommendation({ restoreSections: true, clearInput: true });
     setIntentFeedback("");
@@ -3130,6 +3221,7 @@
 
   (async () => {
     applyTextScale(TEXT_SCALE_DEFAULT);
+    updateFollowPlaybackControl();
     try {
       const saved = await chrome.storage.local.get(LANGUAGE_SETTING_KEY);
       if (LANGUAGE_OPTIONS[saved?.[LANGUAGE_SETTING_KEY]]) {

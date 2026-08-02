@@ -258,7 +258,7 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(source, /type: "SEEK"/);
   assert.match(
     source,
-    /async function seekWithFeedback\(t\)[\s\S]*?catch \(error\)[\s\S]*?showToast\(error\?\.message \|\| "视频跳转失败"\)/,
+    /async function seekWithFeedback\(t, \{ followPlayback = false \} = \{\}\)[\s\S]*?catch \(error\)[\s\S]*?showToast\(error\?\.message \|\| "视频跳转失败"\)/,
   );
   assert.equal(source.match(/seekWithFeedback\(/g)?.length, 4);
   assert.match(source, /message\?\.type === "PLAYBACK_TIME"/);
@@ -269,9 +269,15 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(source, /collapseExpandedRow\(row\)/);
   assert.match(source, /const DEFAULT_SECTIONS_COLLAPSED = true/);
   assert.match(source, /function createSectionView/);
-  assert.match(source, /seekWithFeedback\(group\.startT\)/);
+  assert.match(
+    source,
+    /seekWithFeedback\(group\.points\[0\]\.t, \{ followPlayback: true \}\)/,
+  );
   assert.match(source, /yvpm-section-current/);
-  assert.match(source, /if \(!sectionBody \|\| !sectionBody\.hidden\)/);
+  assert.match(source, /function setFollowPlayback/);
+  assert.match(source, /function setExpandedRow/);
+  assert.match(source, /followRequestId !== state\.followSeekRequestId/);
+  assert.match(source, /forceFollow \|\| index !== state\.currentIndex/);
   assert.match(source, /renderSummary\(response\.summary\)/);
   assert.match(source, /YouTubeSummary\.mergePointsByTimestamp/);
   assert.match(source, /YouTubeSummary\.pointStableKey\(state\.videoId, point\)/);
@@ -391,4 +397,89 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(css, /var\(--expand-fill\)/);
   assert.match(css, /prefers-color-scheme: dark[\s\S]*\.yvpm-insight-card-why/);
   assert.doesNotMatch(source, /DeepSeek|模型品牌|已缓存/);
+});
+
+test("播放跟随是可见二态开关，并覆盖跨章节、推荐和 DOM 生命周期", () => {
+  const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
+  const source = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
+  const css = fs.readFileSync(path.join(root, "sidepanel.css"), "utf8");
+
+  assert.match(html, /id="yvpm-follow-playback"/);
+  assert.match(html, /aria-pressed="false"/);
+  assert.match(css, /\.yvpm-follow-playback\[aria-pressed="true"\]/);
+
+  assert.match(
+    source,
+    /seekWithFeedback\(point\.t, \{ followPlayback: true \}\)/,
+  );
+  assert.match(
+    source,
+    /seekWithFeedback\(group\.points\[0\]\.t, \{ followPlayback: true \}\)/,
+  );
+  assert.match(
+    source,
+    /elements\.followPlayback\.addEventListener\("click", \(\) => \{[\s\S]*?sync: !state\.followPlayback/,
+  );
+
+  const nowPlaying = source.slice(
+    source.indexOf("function updateNowPlaying"),
+    source.indexOf("function updatePointRow"),
+  );
+  assert.ok(
+    nowPlaying.indexOf("setSectionExpanded(state.autoExpandedSection, false)") <
+      nowPlaying.indexOf("setSectionExpanded(currentSection, true)"),
+  );
+  assert.ok(
+    nowPlaying.indexOf("setSectionExpanded(currentSection, true)") <
+      nowPlaying.indexOf("setExpandedRow(row, true)"),
+  );
+  assert.ok(
+    nowPlaying.indexOf("setExpandedRow(row, true)") <
+      nowPlaying.indexOf('classList.toggle("yvpm-now-playing"'),
+  );
+  assert.ok(
+    nowPlaying.indexOf('classList.toggle("yvpm-now-playing"') <
+      nowPlaying.indexOf("row.scrollIntoView"),
+  );
+  assert.match(nowPlaying, /!recommendationIsActive\(\)/);
+  assert.match(nowPlaying, /row\.closest\("\.yvpm-section"\)/);
+
+  const seekWithFeedback = source.slice(
+    source.indexOf("async function seekWithFeedback"),
+    source.indexOf("function resolveTargetLanguage"),
+  );
+  assert.match(seekWithFeedback, /\+\+state\.followSeekRequestId/);
+  assert.match(
+    seekWithFeedback,
+    /if \(followRequestId !== state\.followSeekRequestId\) return/,
+  );
+
+  const defaultRecommendation = source.slice(
+    source.indexOf("function runDefaultRecommendation"),
+    source.indexOf("async function runRecommendation"),
+  );
+  const customRecommendation = source.slice(
+    source.indexOf("async function runRecommendation"),
+    source.indexOf("function showDefaultRecommendationLoading"),
+  );
+  assert.ok(
+    defaultRecommendation.indexOf("setFollowPlayback(false)") <
+      defaultRecommendation.indexOf("recommendationPreviousExpanded"),
+  );
+  assert.ok(
+    customRecommendation.indexOf("setFollowPlayback(false)") <
+      customRecommendation.indexOf("recommendationPreviousExpanded"),
+  );
+
+  const clearPoints = source.slice(
+    source.indexOf("function clearPoints"),
+    source.indexOf("function showEmpty"),
+  );
+  const openLibrary = source.slice(
+    source.indexOf("function openLibrary"),
+    source.indexOf("function closeLibrary"),
+  );
+  assert.match(clearPoints, /setFollowPlayback\(false\)/);
+  assert.match(clearPoints, /state\.autoExpandedSection = null/);
+  assert.match(openLibrary, /setFollowPlayback\(false\)/);
 });

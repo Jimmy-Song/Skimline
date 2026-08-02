@@ -1068,6 +1068,55 @@ body {
   font: 0.5625rem/1 var(--font-time);
 }
 
+.yvpm-list-heading-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.yvpm-follow-playback {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 0.5px solid var(--divider);
+  border-radius: 999px;
+  padding: 5px 8px;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  font: 500 0.59375rem/1 var(--font-detail);
+  transition:
+    border-color 120ms ease,
+    background-color 120ms ease,
+    color 120ms ease;
+}
+
+.yvpm-follow-playback:hover,
+.yvpm-follow-playback:focus-visible {
+  border-color: var(--expand-border);
+  background: var(--adaptive-hover-fill);
+  color: var(--text-primary);
+}
+
+.yvpm-follow-playback[aria-pressed="true"] {
+  border-color: var(--expand-border);
+  background: var(--expand-fill);
+  color: var(--accent-warm);
+}
+
+.yvpm-follow-playback-dot {
+  width: 6px;
+  height: 6px;
+  flex: none;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.yvpm-follow-playback span {
+  color: inherit;
+  font: inherit;
+}
+
 #yvpm-list {
   padding: 0 14px 24px;
 }
