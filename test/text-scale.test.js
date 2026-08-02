@@ -121,3 +121,13 @@ test("窄侧栏隐藏品牌文字并压缩数据刻度，避免顶部控件横�
     /\.yvpm-language-button\s*\{[\s\S]*?#yvpm-language-label\s*\{[\s\S]*?text-overflow: ellipsis/,
   );
 });
+
+test("长推荐问题在窄侧栏或放大字号时保持左对齐并安全换行", () => {
+  const intentChipRule =
+    css.match(/\.yvpm-intent-chip\s*\{([^}]*)\}/)?.[1] || "";
+  assert.ok(intentChipRule);
+  assert.match(intentChipRule, /max-width: 100%/);
+  assert.match(intentChipRule, /overflow-wrap: anywhere/);
+  assert.match(intentChipRule, /text-align: left/);
+  assert.match(intentChipRule, /white-space: normal/);
+});

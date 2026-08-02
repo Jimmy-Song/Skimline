@@ -61,6 +61,28 @@
     return `${String(videoId || "")}:${timestamp}`;
   }
 
+  function findReadingAnchorRow(
+    rows,
+    expandedRow,
+    viewportTop = 0,
+    viewportBottom = root.innerHeight || 0,
+  ) {
+    const visibleRows = [];
+    for (const row of rows || []) {
+      const rect = row?.getBoundingClientRect?.();
+      if (!rect || rect.bottom <= viewportTop || rect.top >= viewportBottom) {
+        continue;
+      }
+      visibleRows.push({ row, top: rect.top });
+    }
+    const visibleExpanded = visibleRows.find(
+      (entry) => entry.row === expandedRow,
+    );
+    if (visibleExpanded) return visibleExpanded.row;
+    visibleRows.sort((a, b) => a.top - b.top);
+    return visibleRows[0]?.row || null;
+  }
+
   function formatTimestamp(totalSeconds) {
     const seconds = Math.max(0, Math.floor(Number(totalSeconds) || 0));
     const hours = Math.floor(seconds / 3600);
@@ -170,6 +192,7 @@
 
   const api = {
     dedupePointsByTimestamp,
+    findReadingAnchorRow,
     findCurrentPointIndex,
     findCurrentSectionIndex,
     formatTimestamp,

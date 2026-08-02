@@ -6,6 +6,7 @@ const path = require("node:path");
 const test = require("node:test");
 const {
   dedupePointsByTimestamp,
+  findReadingAnchorRow,
   findCurrentPointIndex,
   findCurrentSectionIndex,
   formatTimestamp,
@@ -64,6 +65,36 @@ test("F1 乱序块合并后始终按时间单调递增并使用稳定 key", () =
     points.every((point, index) => index === 0 || points[index - 1].t <= point.t),
   );
   assert.equal(pointStableKey("video-1", points[0]), "video-1:146");
+});
+
+test("完成重建前优先选择视口内展开行，否则选择最靠上的可见行", () => {
+  const row = (top, bottom) => ({
+    getBoundingClientRect: () => ({ top, bottom }),
+  });
+  const above = row(20, 80);
+  const topmost = row(90, 140);
+  const expanded = row(180, 260);
+  const below = row(720, 780);
+
+  assert.equal(
+    findReadingAnchorRow(
+      [above, topmost, expanded, below],
+      expanded,
+      96,
+      700,
+    ),
+    expanded,
+  );
+  assert.equal(
+    findReadingAnchorRow(
+      [above, topmost, expanded, below],
+      above,
+      96,
+      700,
+    ),
+    topmost,
+  );
+  assert.equal(findReadingAnchorRow([above, below], null, 96, 700), null);
 });
 
 test("看这段会跳转并尝试播放", async () => {

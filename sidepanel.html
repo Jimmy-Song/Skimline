@@ -129,7 +129,19 @@
       </div>
       <div id="yvpm-list-heading" class="yvpm-list-heading" hidden>
         <strong id="yvpm-list-heading-title">关键章节</strong>
-        <span id="yvpm-list-heading-meta"></span>
+        <div class="yvpm-list-heading-actions">
+          <span id="yvpm-list-heading-meta"></span>
+          <button
+            id="yvpm-follow-playback"
+            class="yvpm-follow-playback"
+            type="button"
+            aria-pressed="false"
+            aria-label="跟随播放已关闭"
+          >
+            <span class="yvpm-follow-playback-dot" aria-hidden="true"></span>
+            <span>跟随播放</span>
+          </button>
+        </div>
       </div>
       <div id="yvpm-list" role="list"></div>
       <div id="yvpm-progress" class="yvpm-progress" hidden aria-live="polite">
