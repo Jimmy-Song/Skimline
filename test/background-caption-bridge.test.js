@@ -6,13 +6,19 @@ const path = require("node:path");
 const test = require("node:test");
 const vm = require("node:vm");
 const YouTubeSummary = require("../generation-utils.js");
+const SkimlineCollections = require("../collection-utils.js");
 
-function createStorage() {
-  const data = {};
+function createStorage(initial = {}) {
+  const data = { ...initial };
   return {
     async get(keys) {
       if (keys == null) return { ...data };
       if (typeof keys === "string") return { [keys]: data[keys] };
+      if (Array.isArray(keys)) {
+        return Object.fromEntries(
+          keys.filter((key) => data[key] !== undefined).map((key) => [key, data[key]]),
+        );
+      }
       return {};
     },
     async set(values) {
@@ -78,7 +84,7 @@ function createHarness(executeScript, summaryOverrides = {}, options = {}) {
     clearTimeout,
     chrome,
     YouTubeSummary: summaryOverrides,
-    SkimlineCollections: require("../collection-utils.js"),
+    SkimlineCollections,
     importScripts() {},
   });
   const source = fs.readFileSync(
@@ -152,8 +158,112 @@ test("收藏后台支持保存、去重、列出、删除和撤销", async () =>
   });
   assert.equal(restored.ok, true);
   assert.equal(restored.duplicate, false);
-  assert.equal(restored.item.id, saved.item.id);
+  assert.notEqual(restored.item.id, saved.item.id);
   assert.equal(restored.count, 1);
+});
+
+test("收藏后台迁移 v1，并完整导出导入 adds 与 removes", async () => {
+  const legacyItem = {
+    id: "legacy-item",
+    selectedText: "迁移后仍然存在的收藏",
+    videoId: "abcdefghijk",
+    videoTitle: "迁移测试",
+    anchorT: 12,
+    sourceType: "claim",
+    pointText: "迁移测试观点",
+    sectionTitle: "迁移",
+    targetLanguage: "zh-CN",
+    savedAt: 1000,
+  };
+  const storage = createStorage({
+    [SkimlineCollections.LEGACY_CLIPPINGS_STORAGE_KEY]: {
+      schemaVersion: 1,
+      revision: 3,
+      items: [legacyItem],
+    },
+  });
+  const harness = createHarness(async () => [], {}, { storage });
+  const listed = await harness.invoke({ type: "LIST_CLIPPINGS" });
+  assert.equal(listed.ok, true);
+  assert.deepEqual(listed.items.map((item) => item.id), ["legacy-item"]);
+
+  const removed = await harness.invoke({
+    type: "DELETE_CLIPPING",
+    id: "legacy-item",
+  });
+  assert.equal(removed.ok, true);
+  const exported = await harness.invoke({ type: "EXPORT_CLIPPINGS_BACKUP" });
+  assert.equal(exported.ok, true);
+  assert.deepEqual(exported.backup.removes, ["legacy-item"]);
+  assert.equal(exported.backup.revision, undefined);
+
+  const target = createHarness(async () => []);
+  const imported = await target.invoke({
+    type: "IMPORT_CLIPPINGS_BACKUP",
+    backup: exported.backup,
+  });
+  assert.equal(imported.ok, true);
+  assert.equal(imported.changed, true);
+  assert.equal(imported.count, 0);
+  const importedAgain = await target.invoke({
+    type: "IMPORT_CLIPPINGS_BACKUP",
+    backup: exported.backup,
+  });
+  assert.equal(importedAgain.ok, true);
+  assert.equal(importedAgain.changed, false);
+});
+
+test("v1 迁移写入失败时不删除旧数据，下一次读取仍可恢复", async () => {
+  const legacyKey = SkimlineCollections.LEGACY_CLIPPINGS_STORAGE_KEY;
+  const data = {
+    [legacyKey]: {
+      schemaVersion: 1,
+      revision: 2,
+      items: [
+        {
+          id: "migration-survivor",
+          selectedText: "迁移失败后仍然保留",
+          videoId: "abcdefghijk",
+          videoTitle: "迁移故障测试",
+          anchorT: 5,
+          sourceType: "claim",
+          pointText: "",
+          sectionTitle: "",
+          targetLanguage: "zh-CN",
+          savedAt: 1000,
+        },
+      ],
+    },
+  };
+  let failNextSet = true;
+  const storage = {
+    async get(keys) {
+      return Object.fromEntries(
+        keys.filter((key) => data[key] !== undefined).map((key) => [key, data[key]]),
+      );
+    },
+    async set(values) {
+      if (failNextSet) {
+        failNextSet = false;
+        throw new Error("migration write failed");
+      }
+      Object.assign(data, values);
+    },
+    async remove(keys) {
+      for (const key of Array.isArray(keys) ? keys : [keys]) delete data[key];
+    },
+  };
+  const harness = createHarness(async () => [], {}, { storage });
+  const failed = await harness.invoke({ type: "LIST_CLIPPINGS" });
+  assert.equal(failed.ok, false);
+  assert.equal(data[legacyKey].items[0].id, "migration-survivor");
+
+  const recovered = await harness.invoke({ type: "LIST_CLIPPINGS" });
+  assert.equal(recovered.ok, true);
+  assert.deepEqual(recovered.items.map((item) => item.id), [
+    "migration-survivor",
+  ]);
+  assert.equal(data[legacyKey], undefined);
 });
 
 test("并发收藏通过后台写队列串行化，不丢失数据", async () => {
@@ -203,7 +313,10 @@ test("收藏写入失败后队列可以恢复，后续保存不会被旧错误�
   const storage = {
     async get(keys) {
       if (keys == null) return { ...data };
-      return { [keys]: data[keys] };
+      if (typeof keys === "string") return { [keys]: data[keys] };
+      return Object.fromEntries(
+        keys.filter((key) => data[key] !== undefined).map((key) => [key, data[key]]),
+      );
     },
     async set(values) {
       if (failNextSet) {

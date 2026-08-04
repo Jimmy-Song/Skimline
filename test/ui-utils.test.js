@@ -9,6 +9,7 @@ const {
   findReadingAnchorRow,
   findCurrentPointIndex,
   findCurrentSectionIndex,
+  formatLibraryDate,
   formatTimestamp,
   getVideoId,
   groupPointsBySections,
@@ -16,7 +17,9 @@ const {
   normalizeTextScale,
   pointIdentity,
   pointStableKey,
+  reconcileLibraryExpansion,
   seekVideo,
+  transitionLibrarySearchExpansion,
 } = require("../ui-utils.js");
 
 test("只从 YouTube watch URL 读取 videoId", () => {
@@ -39,6 +42,85 @@ test("文字缩放值取整、限制在 85%–125% 且脏数据回落到 100%", 
   assert.equal(normalizeTextScale(""), 100);
   assert.equal(normalizeTextScale(null), 100);
   assert.equal(normalizeTextScale(undefined), 100);
+});
+
+test("洞见库日期按本地自然日显示今天、昨天、同年和跨年日期", () => {
+  const now = new Date(2026, 7, 4, 0, 15).getTime();
+  assert.equal(formatLibraryDate(new Date(2026, 7, 4, 0, 1), now), "今天");
+  assert.equal(formatLibraryDate(new Date(2026, 7, 3, 23, 59), now), "昨天");
+  assert.equal(formatLibraryDate(new Date(2026, 0, 2, 12), now), "1月2日");
+  assert.equal(
+    formatLibraryDate(new Date(2025, 11, 31, 23, 59), now),
+    "2025年12月31日",
+  );
+  assert.equal(formatLibraryDate("invalid", now), "");
+});
+
+test("洞见库搜索只在 query 变化时自动展开，清空后恢复搜索前状态", () => {
+  const started = transitionLibrarySearchExpansion(
+    {
+      expandedVideoIds: new Set(["video-a"]),
+      expansionBeforeSearch: null,
+      previousQuery: "",
+    },
+    "  CLAUDE  ",
+    ["video-b", "video-c"],
+  );
+  assert.deepEqual([...started.expandedVideoIds], [
+    "video-a",
+    "video-b",
+    "video-c",
+  ]);
+  assert.deepEqual([...started.expansionBeforeSearch], ["video-a"]);
+  assert.equal(started.query, "claude");
+
+  started.expandedVideoIds.delete("video-b");
+  const sameQuery = transitionLibrarySearchExpansion(
+    {
+      expandedVideoIds: started.expandedVideoIds,
+      expansionBeforeSearch: started.expansionBeforeSearch,
+      previousQuery: started.query,
+    },
+    "claude",
+    ["video-b", "video-c"],
+  );
+  assert.equal(sameQuery.expandedVideoIds.has("video-b"), false);
+
+  const changedQuery = transitionLibrarySearchExpansion(
+    {
+      expandedVideoIds: sameQuery.expandedVideoIds,
+      expansionBeforeSearch: sameQuery.expansionBeforeSearch,
+      previousQuery: sameQuery.query,
+    },
+    "claude code",
+    ["video-b"],
+  );
+  assert.equal(changedQuery.expandedVideoIds.has("video-b"), true);
+
+  const cleared = transitionLibrarySearchExpansion(
+    {
+      expandedVideoIds: changedQuery.expandedVideoIds,
+      expansionBeforeSearch: changedQuery.expansionBeforeSearch,
+      previousQuery: changedQuery.query,
+    },
+    "",
+    [],
+  );
+  assert.deepEqual([...cleared.expandedVideoIds], ["video-a"]);
+  assert.equal(cleared.expansionBeforeSearch, null);
+});
+
+test("展开状态只按完整视频 ID 集合清理，不受搜索可见组影响", () => {
+  const reconciled = reconcileLibraryExpansion(
+    new Set(["video-a", "video-b", "removed"]),
+    new Set(["video-a", "video-b", "removed"]),
+    ["video-a", "video-b"],
+  );
+  assert.deepEqual([...reconciled.expandedVideoIds], ["video-a", "video-b"]);
+  assert.deepEqual([...reconciled.expansionBeforeSearch], [
+    "video-a",
+    "video-b",
+  ]);
 });
 
 test("已有缓存同秒重复观点在渲染前被清理", () => {

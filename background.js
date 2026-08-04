@@ -28,8 +28,19 @@ chrome.sidePanel
 
 async function readClippingsStore() {
   const key = SkimlineCollections.CLIPPINGS_STORAGE_KEY;
-  const stored = await chrome.storage.local.get(key);
-  return SkimlineCollections.normalizeClippingsStore(stored[key]);
+  const legacyKey = SkimlineCollections.LEGACY_CLIPPINGS_STORAGE_KEY;
+  const stored = await chrome.storage.local.get([key, legacyKey]);
+  if (stored[key] !== undefined) {
+    return SkimlineCollections.normalizeReplicaState(stored[key]);
+  }
+  if (stored[legacyKey] === undefined) {
+    return SkimlineCollections.normalizeReplicaState(null);
+  }
+
+  const migrated = SkimlineCollections.normalizeReplicaState(stored[legacyKey]);
+  await chrome.storage.local.set({ [key]: migrated });
+  await chrome.storage.local.remove(legacyKey);
+  return migrated;
 }
 
 function queueClippingMutation(operation) {
@@ -45,24 +56,24 @@ function queueClippingMutation(operation) {
 
 async function persistClippingsStore(store) {
   await chrome.storage.local.set({
-    [SkimlineCollections.CLIPPINGS_STORAGE_KEY]: store,
+    [SkimlineCollections.CLIPPINGS_STORAGE_KEY]:
+      SkimlineCollections.normalizeReplicaState(store),
   });
+}
+
+function listClippingsFromStore(store) {
+  return SkimlineCollections.listClippings([store]);
 }
 
 function saveClipping(input) {
   return queueClippingMutation(async (store) => {
     const clipping = SkimlineCollections.createClipping(input);
     const result = SkimlineCollections.addClipping(store, clipping);
-    if (result.limitReached) {
-      throw new Error(
-        `洞见库已达到 ${SkimlineCollections.MAX_CLIPPINGS} 条，请先删除一些旧收藏`,
-      );
-    }
     if (!result.duplicate) await persistClippingsStore(result.store);
     return {
       item: result.item,
       duplicate: result.duplicate,
-      count: result.store.items.length,
+      count: listClippingsFromStore(result.store).length,
       revision: result.store.revision,
     };
   });
@@ -74,7 +85,8 @@ function deleteClipping(id) {
     if (result.deletedItem) await persistClippingsStore(result.store);
     return {
       deletedItem: result.deletedItem,
-      count: result.store.items.length,
+      deletedIds: result.deletedIds,
+      count: listClippingsFromStore(result.store).length,
       revision: result.store.revision,
     };
   });
@@ -83,16 +95,35 @@ function deleteClipping(id) {
 function restoreDeletedClipping(item) {
   return queueClippingMutation(async (store) => {
     const result = SkimlineCollections.restoreClipping(store, item);
-    if (result.limitReached) {
-      throw new Error(
-        `洞见库已达到 ${SkimlineCollections.MAX_CLIPPINGS} 条，无法撤销删除`,
-      );
-    }
     if (!result.duplicate) await persistClippingsStore(result.store);
     return {
       item: result.item,
       duplicate: result.duplicate,
-      count: result.store.items.length,
+      count: listClippingsFromStore(result.store).length,
+      revision: result.store.revision,
+    };
+  });
+}
+
+async function exportClippingsBackup() {
+  const store = await readClippingsStore();
+  const backup = SkimlineCollections.createClippingsBackup(store);
+  return {
+    backup,
+    filename: `skimline-clippings-${new Date(backup.exportedAt)
+      .toISOString()
+      .slice(0, 10)}.json`,
+    count: listClippingsFromStore(store).length,
+  };
+}
+
+function importClippingsBackup(backup) {
+  return queueClippingMutation(async (store) => {
+    const result = SkimlineCollections.importClippingsBackup(store, backup);
+    if (result.changed) await persistClippingsStore(result.store);
+    return {
+      changed: result.changed,
+      count: result.count,
       revision: result.store.revision,
     };
   });
@@ -1458,7 +1489,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       .then((store) =>
         sendResponse({
           ok: true,
-          items: store.items,
+          items: listClippingsFromStore(store),
           revision: store.revision,
         }),
       )
@@ -1466,6 +1497,30 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({
           ok: false,
           error: error?.message || "读取洞见库失败",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "EXPORT_CLIPPINGS_BACKUP") {
+    exportClippingsBackup()
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "导出收藏失败",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "IMPORT_CLIPPINGS_BACKUP") {
+    importClippingsBackup(message.backup)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "导入收藏失败",
         }),
       );
     return true;

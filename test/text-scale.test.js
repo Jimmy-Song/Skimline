@@ -131,3 +131,22 @@ test("长推荐问题在窄侧栏或放大字号时保持左对齐并安全换�
   assert.match(intentChipRule, /text-align: left/);
   assert.match(intentChipRule, /white-space: normal/);
 });
+
+test("洞见库视频分组适配文字放大、窄侧栏和固定删除点击区", () => {
+  assert.match(
+    css,
+    /\.yvpm-video-group-toggle\s*\{[\s\S]*?grid-template-columns: 30px minmax\(0, 1fr\) 20px/,
+  );
+  assert.match(
+    css,
+    /html\[data-text-scale="expanded"\] \.yvpm-video-group-title\s*\{[\s\S]*?-webkit-line-clamp: 3/,
+  );
+  assert.match(
+    css,
+    /\.yvpm-clipping-delete\s*\{[\s\S]*?width: 40px;[\s\S]*?height: 40px/,
+  );
+  assert.match(
+    css,
+    /@media \(max-width: 340px\)[\s\S]*?\.yvpm-video-group-toggle\s*\{[\s\S]*?grid-template-columns: 28px minmax\(0, 1fr\) 18px/,
+  );
+});
