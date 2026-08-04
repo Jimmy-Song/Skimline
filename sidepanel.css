@@ -532,16 +532,12 @@ body {
 
 .yvpm-library-header {
   display: grid;
-  grid-template-columns: 68px minmax(0, 1fr) 68px;
+  grid-template-columns: 62px minmax(0, 1fr) 74px;
   min-height: 75px;
   align-items: center;
   border-bottom: 0.5px solid var(--divider);
   padding: 10px 14px;
   text-align: center;
-}
-
-.yvpm-library-header::after {
-  content: "";
 }
 
 .yvpm-library-back {
@@ -575,6 +571,32 @@ body {
   margin: 3px 0 0;
   color: var(--text-muted);
   font: 0.5625rem/1.35 var(--font-detail);
+}
+
+.yvpm-library-backup-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+}
+
+.yvpm-library-backup-actions button {
+  border: 0;
+  padding: 5px 0;
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  font: 0.625rem/1 var(--font-detail);
+}
+
+.yvpm-library-backup-actions button:hover,
+.yvpm-library-backup-actions button:focus-visible {
+  outline: 0;
+  color: var(--accent-warm);
+}
+
+.yvpm-library-backup-actions button:disabled {
+  cursor: wait;
+  opacity: 0.45;
 }
 
 .yvpm-library-search-wrap {

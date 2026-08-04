@@ -25,7 +25,12 @@ test("Manifest V3 声明 Side Panel 且不请求多余高权限", () => {
     manifest.description,
     "Skim any long YouTube video into a scannable, jump-anywhere map of its ideas.",
   );
-  assert.deepEqual(manifest.permissions, ["storage", "scripting", "sidePanel"]);
+  assert.deepEqual(manifest.permissions, [
+    "storage",
+    "unlimitedStorage",
+    "scripting",
+    "sidePanel",
+  ]);
   assert.deepEqual(manifest.host_permissions, [
     "https://*.youtube.com/*",
     "https://api.deepseek.com/*",
@@ -103,6 +108,29 @@ test("设置页只保存本地 API Key", () => {
   assert.match(js, /chrome\.storage\.local\.set/);
   assert.match(js, /deepseek_api_key/);
   assert.doesNotMatch(js, /fetch\s*\(/);
+});
+
+test("收藏 schema v2 只在最终 DOM 渲染限制数量", () => {
+  const collections = fs.readFileSync(
+    path.join(root, "collection-utils.js"),
+    "utf8",
+  );
+  const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+  const sidepanel = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
+  assert.match(collections, /const CLIPPINGS_SCHEMA_VERSION = 2/);
+  assert.match(collections, /function materializeLiveItems\(states\)/);
+  assert.match(collections, /function buildClippingsView\(items\)/);
+  assert.match(collections, /Tombstones are monotonic in schema v2/);
+  assert.doesNotMatch(collections, /MAX_CLIPPINGS|normalizeClippingsStore/);
+  assert.doesNotMatch(background, /limitReached|MAX_VISIBLE_CLIPPINGS/);
+  assert.match(
+    sidepanel,
+    /matches\.slice\(\s*0,\s*SkimlineCollections\.MAX_VISIBLE_CLIPPINGS/,
+  );
+  assert.equal(
+    sidepanel.match(/SkimlineCollections\.MAX_VISIBLE_CLIPPINGS/g)?.length,
+    1,
+  );
 });
 
 test("内容脚本保留字幕兜底并作为视频消息桥", () => {
@@ -214,6 +242,9 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(html, /id="yvpm-library-button"/);
   assert.match(html, /id="yvpm-library"/);
   assert.match(html, /id="yvpm-library-search"/);
+  assert.match(html, /id="yvpm-library-export"/);
+  assert.match(html, /id="yvpm-library-import"/);
+  assert.match(html, /id="yvpm-library-import-file"/);
   assert.ok(
     html.indexOf('id="yvpm-explain-selection"') <
       html.indexOf('id="yvpm-save-selection"'),

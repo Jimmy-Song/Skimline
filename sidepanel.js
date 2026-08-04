@@ -98,6 +98,7 @@
     clippingsRevision: 0,
     libraryRequestId: 0,
     libraryError: "",
+    libraryBackupBusy: false,
     clippingSaving: false,
     clippingHintChecked: false,
   };
@@ -152,6 +153,9 @@
     libraryTotal: document.querySelector("#yvpm-library-total"),
     librarySearch: document.querySelector("#yvpm-library-search"),
     librarySearchClear: document.querySelector("#yvpm-library-search-clear"),
+    libraryExport: document.querySelector("#yvpm-library-export"),
+    libraryImport: document.querySelector("#yvpm-library-import"),
+    libraryImportFile: document.querySelector("#yvpm-library-import-file"),
     libraryList: document.querySelector("#yvpm-library-list"),
     libraryEmpty: document.querySelector("#yvpm-library-empty"),
     libraryEmptyTitle: document.querySelector("#yvpm-library-empty-title"),
@@ -829,9 +833,18 @@
       state.clippings,
       query,
     );
+    const visibleMatches = matches.slice(
+      0,
+      SkimlineCollections.MAX_VISIBLE_CLIPPINGS,
+    );
+    const hiddenMatchCount = matches.length - visibleMatches.length;
     elements.libraryTotal.textContent = query
-      ? `找到 ${matches.length} 条 · 共 ${total} 条`
-      : `${total} 条收藏`;
+      ? `找到 ${matches.length} 条 · 共 ${total} 条${
+          hiddenMatchCount ? ` · 显示前 ${visibleMatches.length} 条` : ""
+        }`
+      : `${total} 条收藏${
+          hiddenMatchCount ? ` · 显示最近 ${visibleMatches.length} 条` : ""
+        }`;
     elements.librarySearchClear.hidden = !query;
     updateLibraryCount(total);
 
@@ -856,7 +869,9 @@
 
     elements.libraryEmpty.hidden = true;
     const fragment = document.createDocumentFragment();
-    for (const item of matches) fragment.append(createClippingCard(item));
+    for (const item of visibleMatches) {
+      fragment.append(createClippingCard(item));
+    }
     elements.libraryList.replaceChildren(fragment);
   }
 
@@ -873,13 +888,8 @@
       ) {
         return;
       }
-      const store = SkimlineCollections.normalizeClippingsStore({
-        schemaVersion: SkimlineCollections.CLIPPINGS_SCHEMA_VERSION,
-        revision: response.revision,
-        items: response.items,
-      });
-      state.clippings = store.items;
-      state.clippingsRevision = store.revision;
+      state.clippings = SkimlineCollections.buildClippingsView(response.items);
+      state.clippingsRevision = Math.max(0, Number(response.revision) || 0);
       state.libraryError = "";
       updateLibraryCount();
       if (state.activeView === "library") renderLibrary();
@@ -917,6 +927,81 @@
     elements.libraryButton.setAttribute("aria-pressed", "false");
     requestAnimationFrame(() => window.scrollTo(0, state.summaryScrollTop));
     if (state.loaded) void showClippingHintOnce();
+  }
+
+  function setLibraryBackupBusy(busy) {
+    state.libraryBackupBusy = Boolean(busy);
+    elements.libraryExport.disabled = state.libraryBackupBusy;
+    elements.libraryImport.disabled = state.libraryBackupBusy;
+  }
+
+  async function exportClippingsBackup() {
+    if (state.libraryBackupBusy) return;
+    setLibraryBackupBusy(true);
+    try {
+      const response = await runtimeMessage({
+        type: "EXPORT_CLIPPINGS_BACKUP",
+      });
+      if (!response?.ok || !response.backup) {
+        throw new Error(response?.error || "导出收藏失败");
+      }
+      const blob = new Blob(
+        [`${JSON.stringify(response.backup, null, 2)}\n`],
+        { type: "application/json" },
+      );
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = response.filename || "skimline-clippings.json";
+      link.hidden = true;
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 0);
+      showToast(`已导出 ${Math.max(0, Number(response.count) || 0)} 条收藏`);
+    } catch (error) {
+      showToast(error?.message || "导出收藏失败");
+    } finally {
+      setLibraryBackupBusy(false);
+    }
+  }
+
+  async function importClippingsBackupFile(file) {
+    if (state.libraryBackupBusy || !file) return;
+    setLibraryBackupBusy(true);
+    try {
+      if (file.size > 50 * 1024 * 1024) {
+        throw new Error("备份文件不能超过 50 MB");
+      }
+      let backup;
+      try {
+        backup = JSON.parse(await file.text());
+      } catch {
+        throw new Error("备份文件不是有效的 JSON");
+      }
+      const response = await runtimeMessage({
+        type: "IMPORT_CLIPPINGS_BACKUP",
+        backup,
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "导入收藏失败");
+      }
+      state.clippingsRevision = Math.max(
+        state.clippingsRevision,
+        Number(response.revision) || 0,
+      );
+      await loadClippings();
+      showToast(
+        response.changed
+          ? `导入完成，共 ${Math.max(0, Number(response.count) || 0)} 条收藏`
+          : "备份内容已经存在",
+      );
+    } catch (error) {
+      showToast(error?.message || "导入收藏失败");
+    } finally {
+      elements.libraryImportFile.value = "";
+      setLibraryBackupBusy(false);
+    }
   }
 
   async function restoreClippingItem(item) {
@@ -1534,11 +1619,10 @@
 
   function upsertClipping(item) {
     if (!item) return;
-    state.clippings = SkimlineCollections.normalizeClippingsStore({
-      schemaVersion: SkimlineCollections.CLIPPINGS_SCHEMA_VERSION,
-      revision: state.clippingsRevision,
-      items: [item, ...state.clippings],
-    }).items;
+    state.clippings = SkimlineCollections.buildClippingsView([
+      item,
+      ...state.clippings,
+    ]);
     updateLibraryCount();
     if (state.activeView === "library") renderLibrary();
   }
@@ -3148,6 +3232,15 @@
     renderLibrary();
     elements.librarySearch.focus();
   });
+  elements.libraryExport.addEventListener("click", () => {
+    void exportClippingsBackup();
+  });
+  elements.libraryImport.addEventListener("click", () => {
+    if (!state.libraryBackupBusy) elements.libraryImportFile.click();
+  });
+  elements.libraryImportFile.addEventListener("change", () => {
+    void importClippingsBackupFile(elements.libraryImportFile.files?.[0]);
+  });
 
   elements.languageButton.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -3272,10 +3365,10 @@
     ) {
       return;
     }
-    const store = SkimlineCollections.normalizeClippingsStore(
+    const store = SkimlineCollections.normalizeReplicaState(
       changes[SkimlineCollections.CLIPPINGS_STORAGE_KEY].newValue,
     );
-    state.clippings = store.items;
+    state.clippings = SkimlineCollections.listClippings([store]);
     state.clippingsRevision = store.revision;
     state.libraryError = "";
     updateLibraryCount();
