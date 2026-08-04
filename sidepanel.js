@@ -99,6 +99,10 @@
     libraryRequestId: 0,
     libraryError: "",
     libraryBackupBusy: false,
+    libraryExpandedVideoIds: new Set(),
+    libraryExpansionInitialized: false,
+    libraryExpansionBeforeSearch: null,
+    libraryLastQuery: "",
     clippingSaving: false,
     clippingHintChecked: false,
   };
@@ -743,18 +747,6 @@
     );
   }
 
-  function formatClippingDate(timestamp) {
-    try {
-      return new Intl.DateTimeFormat(navigator.language || "zh-CN", {
-        year: "numeric",
-        month: "short",
-        day: "numeric",
-      }).format(new Date(timestamp));
-    } catch {
-      return new Date(timestamp).toLocaleDateString();
-    }
-  }
-
   function renderLibraryEmpty(title, copy) {
     elements.libraryList.replaceChildren();
     elements.libraryEmptyTitle.textContent = title;
@@ -773,17 +765,87 @@
     return "从头观看";
   }
 
+  function currentLibraryQuery() {
+    return SkimlineCollections.normalizeClippingText(
+      elements.librarySearch.value,
+    ).toLowerCase();
+  }
+
+  function getLibraryGroups(rawQuery = elements.librarySearch.value) {
+    return SkimlineCollections.groupClippingsByVideo(
+      state.clippings,
+      rawQuery,
+    );
+  }
+
+  function reconcileLibraryExpansionState() {
+    const validVideoIds = new Set(
+      state.clippings.map((item) => item.videoId),
+    );
+    const reconciled = YouTubeSummary.reconcileLibraryExpansion(
+      state.libraryExpandedVideoIds,
+      state.libraryExpansionBeforeSearch,
+      validVideoIds,
+    );
+    state.libraryExpandedVideoIds = reconciled.expandedVideoIds;
+    state.libraryExpansionBeforeSearch =
+      reconciled.expansionBeforeSearch;
+    if (!validVideoIds.size) state.libraryExpansionInitialized = false;
+  }
+
+  function initializeLibraryExpansion(groups) {
+    if (state.libraryExpansionInitialized || !groups.length) return;
+    state.libraryExpandedVideoIds.add(groups[0].videoId);
+    state.libraryExpansionInitialized = true;
+  }
+
+  function initializeVisibleLibraryExpansion() {
+    if (state.activeView !== "library") return;
+    initializeLibraryExpansion(getLibraryGroups(""));
+  }
+
+  function applyLibrarySearchTransition() {
+    const groups = getLibraryGroups();
+    const transition = YouTubeSummary.transitionLibrarySearchExpansion(
+      {
+        expandedVideoIds: state.libraryExpandedVideoIds,
+        expansionBeforeSearch: state.libraryExpansionBeforeSearch,
+        previousQuery: state.libraryLastQuery,
+      },
+      elements.librarySearch.value,
+      groups.map((group) => group.videoId),
+    );
+    state.libraryExpandedVideoIds = transition.expandedVideoIds;
+    state.libraryExpansionBeforeSearch = transition.expansionBeforeSearch;
+    state.libraryLastQuery = transition.query;
+    renderLibrary();
+  }
+
+  function expandRestoredVideoGroup(videoId) {
+    if (!videoId) return;
+    state.libraryExpandedVideoIds.add(videoId);
+    if (state.libraryExpansionBeforeSearch instanceof Set) {
+      state.libraryExpansionBeforeSearch.add(videoId);
+    }
+    state.libraryExpansionInitialized = true;
+  }
+
   function createClippingCard(item) {
     const card = makeElement("article", "yvpm-clipping-card");
     card.setAttribute("role", "listitem");
     card.dataset.clippingId = item.id;
+
+    const remove = makeElement("button", "yvpm-clipping-delete", "×");
+    remove.type = "button";
+    remove.setAttribute("aria-label", `删除收藏：${item.selectedText}`);
+    remove.addEventListener("click", () => deleteClippingById(item.id));
 
     const quote = makeElement(
       "blockquote",
       "yvpm-clipping-quote",
       item.selectedText,
     );
-    card.append(quote);
+    card.append(remove, quote);
 
     if (
       item.pointText &&
@@ -803,46 +865,107 @@
       "aria-label",
       `回到视频 ${item.videoTitle} ${clippingSourceLabel(item)}`,
     );
-    const title = makeElement(
-      "span",
-      "yvpm-clipping-video-title",
-      item.videoTitle,
-    );
     const sourceMeta = makeElement(
       "span",
       "yvpm-clipping-source-meta",
-      `${clippingSourceLabel(item)} · ${formatClippingDate(item.savedAt)}`,
+      `${clippingSourceLabel(item)} · ${YouTubeSummary.formatLibraryDate(item.savedAt)}`,
     );
-    source.append(title, sourceMeta);
+    source.append(sourceMeta);
     source.addEventListener("click", () => openClippingSource(item));
 
-    const remove = makeElement("button", "yvpm-clipping-delete", "×");
-    remove.type = "button";
-    remove.setAttribute("aria-label", `删除收藏：${item.selectedText}`);
-    remove.addEventListener("click", () => deleteClippingById(item.id));
-
-    footer.append(source, remove);
+    footer.append(source);
     card.append(footer);
     return card;
   }
 
+  function populateVideoGroupBody(body, group) {
+    if (body.dataset.populated === "true") return;
+    const fragment = document.createDocumentFragment();
+    for (const item of group.items) fragment.append(createClippingCard(item));
+    body.append(fragment);
+    body.dataset.populated = "true";
+  }
+
+  function videoGroupDomId(videoId) {
+    return `yvpm-library-video-${videoId}`;
+  }
+
+  function createVideoGroup(group, expanded) {
+    const wrapper = makeElement("article", "yvpm-video-group");
+    wrapper.setAttribute("role", "listitem");
+    wrapper.dataset.videoId = group.videoId;
+    wrapper.classList.toggle("yvpm-video-group-expanded", expanded);
+
+    const toggle = makeElement("button", "yvpm-video-group-toggle");
+    toggle.type = "button";
+    toggle.setAttribute("aria-expanded", String(expanded));
+    toggle.setAttribute("aria-controls", videoGroupDomId(group.videoId));
+
+    const count = makeElement(
+      "span",
+      "yvpm-video-group-count",
+      String(group.totalCount),
+    );
+    count.setAttribute("aria-hidden", "true");
+    const copy = makeElement("span", "yvpm-video-group-copy");
+    const title = makeElement(
+      "span",
+      "yvpm-video-group-title",
+      group.videoTitle,
+    );
+    const metaCopy =
+      currentLibraryQuery() && group.visibleCount < group.totalCount
+        ? `匹配 ${group.visibleCount} 条 · 共 ${group.totalCount} 条收藏`
+        : `${group.totalCount} 条收藏 · 最近收藏于${YouTubeSummary.formatLibraryDate(group.latestSavedAt)}`;
+    const meta = makeElement("span", "yvpm-video-group-meta", metaCopy);
+    copy.append(title, meta);
+    const chevron = makeElement("span", "yvpm-video-group-chevron", "⌄");
+    chevron.setAttribute("aria-hidden", "true");
+    toggle.append(count, copy, chevron);
+
+    const body = makeElement("div", "yvpm-video-group-body");
+    body.id = videoGroupDomId(group.videoId);
+    body.setAttribute("role", "list");
+    body.setAttribute("aria-label", `${group.videoTitle}的收藏`);
+    body.hidden = !expanded;
+    if (expanded) populateVideoGroupBody(body, group);
+
+    toggle.addEventListener("click", () => {
+      const nextExpanded = !state.libraryExpandedVideoIds.has(group.videoId);
+      if (nextExpanded) state.libraryExpandedVideoIds.add(group.videoId);
+      else state.libraryExpandedVideoIds.delete(group.videoId);
+      wrapper.classList.toggle("yvpm-video-group-expanded", nextExpanded);
+      toggle.setAttribute("aria-expanded", String(nextExpanded));
+      body.hidden = !nextExpanded;
+      if (nextExpanded) populateVideoGroupBody(body, group);
+    });
+
+    wrapper.append(toggle, body);
+    return wrapper;
+  }
+
   function renderLibrary() {
     const total = state.clippings.length;
-    const query = elements.librarySearch.value;
-    const matches = SkimlineCollections.searchClippings(
-      state.clippings,
-      query,
-    );
+    const query = currentLibraryQuery();
+    const groups = getLibraryGroups();
+    const matches = groups.flatMap((group) => group.items);
     const visibleMatches = matches.slice(
       0,
       SkimlineCollections.MAX_VISIBLE_CLIPPINGS,
     );
     const hiddenMatchCount = matches.length - visibleMatches.length;
+    const visibleIds = new Set(visibleMatches.map((item) => item.id));
+    const visibleGroups = groups
+      .map((group) => ({
+        ...group,
+        items: group.items.filter((item) => visibleIds.has(item.id)),
+      }))
+      .filter((group) => group.items.length);
     elements.libraryTotal.textContent = query
-      ? `找到 ${matches.length} 条 · 共 ${total} 条${
+      ? `找到 ${groups.length} 个视频 · ${matches.length} 条收藏${
           hiddenMatchCount ? ` · 显示前 ${visibleMatches.length} 条` : ""
         }`
-      : `${total} 条收藏${
+      : `${groups.length} 个视频 · ${total} 条收藏${
           hiddenMatchCount ? ` · 显示最近 ${visibleMatches.length} 条` : ""
         }`;
     elements.librarySearchClear.hidden = !query;
@@ -859,7 +982,7 @@
       );
       return;
     }
-    if (!matches.length) {
+    if (!groups.length) {
       renderLibraryEmpty(
         "没有找到相关收藏",
         "换一个关键词，搜索收藏内容或视频标题。",
@@ -869,38 +992,47 @@
 
     elements.libraryEmpty.hidden = true;
     const fragment = document.createDocumentFragment();
-    for (const item of visibleMatches) {
-      fragment.append(createClippingCard(item));
+    for (const group of visibleGroups) {
+      fragment.append(
+        createVideoGroup(
+          group,
+          state.libraryExpandedVideoIds.has(group.videoId),
+        ),
+      );
     }
     elements.libraryList.replaceChildren(fragment);
   }
 
-  async function loadClippings() {
+  async function loadClippings({ render = true } = {}) {
     const requestId = ++state.libraryRequestId;
     try {
       const response = await runtimeMessage({ type: "LIST_CLIPPINGS" });
-      if (requestId !== state.libraryRequestId) return;
+      if (requestId !== state.libraryRequestId) return false;
       if (!response?.ok) {
         throw new Error(response?.error || "读取洞见库失败");
       }
       if (
         Number(response.revision) < state.clippingsRevision
       ) {
-        return;
+        return false;
       }
       state.clippings = SkimlineCollections.buildClippingsView(response.items);
       state.clippingsRevision = Math.max(0, Number(response.revision) || 0);
       state.libraryError = "";
+      reconcileLibraryExpansionState();
+      initializeVisibleLibraryExpansion();
       updateLibraryCount();
-      if (state.activeView === "library") renderLibrary();
+      if (render && state.activeView === "library") renderLibrary();
+      return true;
     } catch (error) {
-      if (requestId !== state.libraryRequestId) return;
+      if (requestId !== state.libraryRequestId) return false;
       state.libraryError = error?.message || "读取洞见库失败，请重试";
-      if (state.activeView === "library") renderLibrary();
+      if (render && state.activeView === "library") renderLibrary();
+      return false;
     }
   }
 
-  function openLibrary() {
+  async function openLibrary() {
     if (state.activeView === "library") return;
     setFollowPlayback(false);
     state.summaryScrollTop = window.scrollY;
@@ -914,9 +1046,19 @@
     elements.library.hidden = false;
     elements.libraryButton.setAttribute("aria-pressed", "true");
     window.scrollTo(0, 0);
+    initializeLibraryExpansion(getLibraryGroups(""));
     renderLibrary();
-    void loadClippings();
     requestAnimationFrame(() => elements.librarySearch.focus());
+    const loadRequestId = state.libraryRequestId + 1;
+    await loadClippings({ render: false });
+    if (
+      state.activeView !== "library" ||
+      state.libraryRequestId !== loadRequestId
+    ) {
+      return;
+    }
+    initializeLibraryExpansion(getLibraryGroups(""));
+    renderLibrary();
   }
 
   function closeLibrary() {
@@ -1005,6 +1147,9 @@
   }
 
   async function restoreClippingItem(item) {
+    const recreatesVideoGroup = !state.clippings.some(
+      (candidate) => candidate.videoId === item?.videoId,
+    );
     const response = await runtimeMessage({
       type: "RESTORE_CLIPPING",
       item,
@@ -1016,6 +1161,7 @@
       state.clippingsRevision,
       Number(response.revision) || 0,
     );
+    if (recreatesVideoGroup) expandRestoredVideoGroup(response.item?.videoId);
     upsertClipping(response.item);
     showToast(response.duplicate ? "这段已经在洞见库中" : "已恢复收藏");
   }
@@ -1039,6 +1185,7 @@
         Number(response.revision) || 0,
       );
       state.clippings = state.clippings.filter((item) => item.id !== id);
+      reconcileLibraryExpansionState();
       renderLibrary();
       showToast("已删除", {
         actionLabel: "撤销",
@@ -1623,6 +1770,8 @@
       item,
       ...state.clippings,
     ]);
+    reconcileLibraryExpansionState();
+    initializeVisibleLibraryExpansion();
     updateLibraryCount();
     if (state.activeView === "library") renderLibrary();
   }
@@ -3223,13 +3372,16 @@
   );
   elements.libraryButton.addEventListener("click", () => {
     if (state.activeView === "library") closeLibrary();
-    else openLibrary();
+    else void openLibrary();
   });
   elements.libraryBack.addEventListener("click", closeLibrary);
-  elements.librarySearch.addEventListener("input", renderLibrary);
+  elements.librarySearch.addEventListener(
+    "input",
+    applyLibrarySearchTransition,
+  );
   elements.librarySearchClear.addEventListener("click", () => {
     elements.librarySearch.value = "";
-    renderLibrary();
+    applyLibrarySearchTransition();
     elements.librarySearch.focus();
   });
   elements.libraryExport.addEventListener("click", () => {
@@ -3371,6 +3523,8 @@
     state.clippings = SkimlineCollections.listClippings([store]);
     state.clippingsRevision = store.revision;
     state.libraryError = "";
+    reconcileLibraryExpansionState();
+    initializeVisibleLibraryExpansion();
     updateLibraryCount();
     if (state.activeView === "library") renderLibrary();
   });

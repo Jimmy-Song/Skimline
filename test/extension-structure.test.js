@@ -354,6 +354,13 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(source, /function captureExplainableSelection/);
   assert.match(source, /function saveCurrentSelection/);
   assert.match(source, /function renderLibrary/);
+  assert.match(source, /function createVideoGroup/);
+  assert.match(source, /function populateVideoGroupBody/);
+  assert.match(source, /function initializeLibraryExpansion/);
+  assert.match(source, /function initializeVisibleLibraryExpansion/);
+  assert.equal(source.match(/initializeVisibleLibraryExpansion\(\)/g)?.length, 4);
+  assert.match(source, /function applyLibrarySearchTransition/);
+  assert.match(source, /function reconcileLibraryExpansionState/);
   assert.match(source, /function deleteClippingById/);
   assert.match(source, /function restoreClippingItem/);
   assert.match(source, /function openClippingSource/);
@@ -365,6 +372,30 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(source, /type: "DELETE_CLIPPING"/);
   assert.match(source, /type: "RESTORE_CLIPPING"/);
   assert.match(source, /chrome\.storage\?\.onChanged\?\.addListener/);
+  const renderLibraryBlock = source.slice(
+    source.indexOf("function renderLibrary()"),
+    source.indexOf("async function loadClippings"),
+  );
+  assert.match(renderLibraryBlock, /getLibraryGroups\(\)/);
+  assert.match(source, /function getLibraryGroups[\s\S]*?groupClippingsByVideo/);
+  assert.doesNotMatch(
+    renderLibraryBlock,
+    /libraryExpandedVideoIds\.(?:add|delete|clear)|initializeLibraryExpansion|applyLibrarySearchTransition|reconcileLibraryExpansionState/,
+  );
+  const createVideoGroupBlock = source.slice(
+    source.indexOf("function createVideoGroup"),
+    source.indexOf("function renderLibrary()"),
+  );
+  assert.match(
+    createVideoGroupBlock,
+    /if \(expanded\) populateVideoGroupBody\(body, group\)/,
+  );
+  assert.match(
+    createVideoGroupBlock,
+    /if \(nextExpanded\) populateVideoGroupBody\(body, group\)/,
+  );
+  assert.match(source, /loadClippings\(\{ render: false \}\)/);
+  assert.match(source, /state\.libraryRequestId !== loadRequestId/);
   const saveSelectionBlock = source.slice(
     source.indexOf("async function saveCurrentSelection"),
     source.indexOf("async function copyExplanationSelection"),

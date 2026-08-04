@@ -93,6 +93,91 @@
       : `${String(minutes).padStart(2, "0")}:${String(remainder).padStart(2, "0")}`;
   }
 
+  function sameLocalDate(a, b) {
+    return a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate();
+  }
+
+  function formatLibraryDate(timestamp, now = Date.now()) {
+    const date = new Date(Number(timestamp));
+    const current = new Date(Number(now));
+    if (
+      !Number.isFinite(date.getTime()) ||
+      !Number.isFinite(current.getTime())
+    ) {
+      return "";
+    }
+    if (sameLocalDate(date, current)) return "今天";
+    const yesterday = new Date(
+      current.getFullYear(),
+      current.getMonth(),
+      current.getDate() - 1,
+    );
+    if (sameLocalDate(date, yesterday)) return "昨天";
+    const monthAndDay = `${date.getMonth() + 1}月${date.getDate()}日`;
+    return date.getFullYear() === current.getFullYear()
+      ? monthAndDay
+      : `${date.getFullYear()}年${monthAndDay}`;
+  }
+
+  function normalizeLibraryQuery(value) {
+    return String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
+  }
+
+  function transitionLibrarySearchExpansion(
+    {
+      expandedVideoIds,
+      expansionBeforeSearch = null,
+      previousQuery = "",
+    },
+    nextRawQuery,
+    matchedVideoIds = [],
+  ) {
+    const previous = normalizeLibraryQuery(previousQuery);
+    const next = normalizeLibraryQuery(nextRawQuery);
+    let expanded = new Set(expandedVideoIds || []);
+    let beforeSearch =
+      expansionBeforeSearch === null
+        ? null
+        : new Set(expansionBeforeSearch || []);
+
+    if (previous !== next) {
+      if (!previous && next) beforeSearch = new Set(expanded);
+      if (next) {
+        for (const videoId of matchedVideoIds || []) {
+          if (videoId) expanded.add(String(videoId));
+        }
+      } else if (previous) {
+        expanded = new Set(beforeSearch || []);
+        beforeSearch = null;
+      }
+    }
+
+    return {
+      expandedVideoIds: expanded,
+      expansionBeforeSearch: beforeSearch,
+      query: next,
+    };
+  }
+
+  function reconcileLibraryExpansion(
+    expandedVideoIds,
+    expansionBeforeSearch,
+    validVideoIds,
+  ) {
+    const valid = new Set(validVideoIds || []);
+    const filterValid = (values) =>
+      new Set([...new Set(values || [])].filter((videoId) => valid.has(videoId)));
+    return {
+      expandedVideoIds: filterValid(expandedVideoIds),
+      expansionBeforeSearch:
+        expansionBeforeSearch === null
+          ? null
+          : filterValid(expansionBeforeSearch),
+    };
+  }
+
   function normalizeTextScale(
     value,
     { min = 85, max = 125, defaultValue = 100 } = {},
@@ -195,6 +280,7 @@
     findReadingAnchorRow,
     findCurrentPointIndex,
     findCurrentSectionIndex,
+    formatLibraryDate,
     formatTimestamp,
     getVideoId,
     groupPointsBySections,
@@ -202,7 +288,9 @@
     normalizeTextScale,
     pointIdentity,
     pointStableKey,
+    reconcileLibraryExpansion,
     seekVideo,
+    transitionLibrarySearchExpansion,
   };
   root.YouTubeSummary = Object.assign(root.YouTubeSummary || {}, api);
   if (typeof module !== "undefined" && module.exports) module.exports = api;

@@ -15,9 +15,30 @@
     "insightWhy",
     "insightDetail",
   ]);
+  const CLIPPING_SEARCH_FIELDS = [
+    "selectedText",
+    "videoTitle",
+    "pointText",
+    "sectionTitle",
+  ];
+  const CLIPPING_CONTENT_FIELDS = [
+    "selectedText",
+    "pointText",
+    "sectionTitle",
+  ];
 
   function normalizeClippingText(value) {
     return String(value || "").replace(/\s+/g, " ").trim();
+  }
+
+  function normalizeSearchText(value) {
+    return normalizeClippingText(value).toLowerCase();
+  }
+
+  function clippingMatchesFields(item, query, fields) {
+    return fields.some((field) =>
+      normalizeSearchText(item?.[field]).includes(query),
+    );
   }
 
   function characterLength(value) {
@@ -279,18 +300,11 @@
   }
 
   function searchClippings(items, rawQuery) {
-    const query = normalizeClippingText(rawQuery).toLowerCase();
+    const query = normalizeSearchText(rawQuery);
     const view = buildClippingsView(items);
     if (!query) return view;
     return view.filter((item) =>
-      [
-        item.selectedText,
-        item.videoTitle,
-        item.pointText,
-        item.sectionTitle,
-      ].some((field) =>
-        normalizeClippingText(field).toLowerCase().includes(query),
-      ),
+      clippingMatchesFields(item, query, CLIPPING_SEARCH_FIELDS),
     );
   }
 
@@ -355,6 +369,61 @@
     };
   }
 
+  function groupClippingsByVideo(items, rawQuery) {
+    const query = normalizeSearchText(rawQuery);
+    const normalizedItems = buildClippingsView(items);
+    const groupsByVideoId = new Map();
+
+    for (const item of normalizedItems) {
+      let group = groupsByVideoId.get(item.videoId);
+      if (!group) {
+        group = {
+          videoId: item.videoId,
+          videoTitle: item.videoTitle,
+          latestSavedAt: item.savedAt,
+          searchableTitles: new Set(),
+          allItems: [],
+        };
+        groupsByVideoId.set(item.videoId, group);
+      }
+      group.allItems.push(item);
+      group.searchableTitles.add(normalizeSearchText(item.videoTitle));
+      if (item.savedAt > group.latestSavedAt) {
+        group.latestSavedAt = item.savedAt;
+        group.videoTitle = item.videoTitle;
+      }
+    }
+
+    return [...groupsByVideoId.values()]
+      .map((group) => {
+        const titleMatched = Boolean(
+          query &&
+            [...group.searchableTitles].some((title) => title.includes(query)),
+        );
+        const visibleItems =
+          !query || titleMatched
+            ? group.allItems
+            : group.allItems.filter((item) =>
+                clippingMatchesFields(item, query, CLIPPING_CONTENT_FIELDS),
+              );
+        return {
+          videoId: group.videoId,
+          videoTitle: group.videoTitle,
+          latestSavedAt: group.latestSavedAt,
+          totalCount: group.allItems.length,
+          visibleCount: visibleItems.length,
+          titleMatched,
+          items: visibleItems,
+        };
+      })
+      .filter((group) => group.visibleCount > 0)
+      .sort(
+        (a, b) =>
+          b.latestSavedAt - a.latestSavedAt ||
+          compareStrings(a.videoId, b.videoId),
+      );
+  }
+
   const api = {
     CLIPPINGS_BACKUP_FORMAT,
     CLIPPINGS_SCHEMA_VERSION,
@@ -368,6 +437,7 @@
     clippingDedupeKey,
     createClipping,
     createClippingsBackup,
+    groupClippingsByVideo,
     importClippingsBackup,
     listClippings,
     materializeLiveItems,

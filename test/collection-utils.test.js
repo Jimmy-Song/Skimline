@@ -289,3 +289,115 @@ test("未知 tombstone 在任意合并顺序中都不会被清理", () => {
     assert.equal(Collections.materializeLiveItems([merged]).length, 0);
   }
 });
+
+test("收藏按 videoId 分组，组间和组内都按最近收藏排序", () => {
+  const items = [
+    clipping({
+      id: "video-a-old",
+      savedAt: 1000,
+      videoId: "abcdefghijk",
+      videoTitle: "视频 A 的旧标题",
+      selectedText: "视频 A 的第一条收藏",
+    }),
+    clipping({
+      id: "video-b",
+      savedAt: 2000,
+      videoId: "zyxwvutsrqp",
+      videoTitle: "视频 B",
+      selectedText: "视频 B 的收藏",
+    }),
+    clipping({
+      id: "video-a-new",
+      savedAt: 3000,
+      videoId: "abcdefghijk",
+      videoTitle: "视频 A 的新标题",
+      selectedText: "视频 A 的第二条收藏",
+    }),
+  ];
+
+  const groups = Collections.groupClippingsByVideo(items, "");
+  assert.deepEqual(groups.map((group) => group.videoId), [
+    "abcdefghijk",
+    "zyxwvutsrqp",
+  ]);
+  assert.equal(groups[0].videoTitle, "视频 A 的新标题");
+  assert.equal(groups[0].latestSavedAt, 3000);
+  assert.equal(groups[0].totalCount, 2);
+  assert.equal(groups[0].visibleCount, 2);
+  assert.deepEqual(groups[0].items.map((item) => item.id), [
+    "video-a-new",
+    "video-a-old",
+  ]);
+});
+
+test("搜索任一历史视频标题时返回该视频的全部收藏", () => {
+  const items = [
+    clipping({
+      id: "old-title",
+      savedAt: 1000,
+      videoTitle: "Anthropic Context Rules",
+      selectedText: "第一条收藏",
+    }),
+    clipping({
+      id: "new-title",
+      savedAt: 2000,
+      videoTitle: "Claude Code Context Rules",
+      selectedText: "第二条收藏",
+    }),
+  ];
+
+  const groups = Collections.groupClippingsByVideo(
+    items,
+    "  ANTHROPIC   CONTEXT ",
+  );
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].titleMatched, true);
+  assert.equal(groups[0].videoTitle, "Claude Code Context Rules");
+  assert.equal(groups[0].visibleCount, 2);
+  assert.deepEqual(groups[0].items.map((item) => item.id), [
+    "new-title",
+    "old-title",
+  ]);
+});
+
+test("搜索收藏内容时保留视频父级并只返回命中的子项", () => {
+  const items = [
+    clipping({
+      id: "json",
+      savedAt: 3000,
+      selectedText: "可以用代码检查输出是否为 JSON",
+      pointText: "自动化评估器适合结构检查",
+    }),
+    clipping({
+      id: "handoff",
+      savedAt: 2000,
+      selectedText: "交接失败需要 LLM 评判",
+      sectionTitle: "复杂失败模式",
+    }),
+    clipping({
+      id: "other-video",
+      savedAt: 1000,
+      videoId: "zyxwvutsrqp",
+      videoTitle: "另一个视频",
+      selectedText: "没有命中的收藏",
+    }),
+  ];
+
+  const groups = Collections.groupClippingsByVideo(items, "  复杂失败   ");
+  assert.equal(groups.length, 1);
+  assert.equal(groups[0].videoId, "abcdefghijk");
+  assert.equal(groups[0].titleMatched, false);
+  assert.equal(groups[0].totalCount, 2);
+  assert.equal(groups[0].visibleCount, 1);
+  assert.equal(groups[0].items[0].id, "handoff");
+});
+
+test("视频分组不会修改调用方传入的收藏数组", () => {
+  const items = [
+    clipping({ id: "older", savedAt: 1000, selectedText: "较早收藏" }),
+    clipping({ id: "newer", savedAt: 2000, selectedText: "较新收藏" }),
+  ];
+  const snapshot = items.map((item) => ({ ...item }));
+  Collections.groupClippingsByVideo(items, "收藏");
+  assert.deepEqual(items, snapshot);
+});
