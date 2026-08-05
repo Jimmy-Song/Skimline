@@ -624,3 +624,70 @@ test("活动标签切换保存并恢复跟随状态，且不使同上下文生�
       removedListener.indexOf("if (tabId !== state.tabId) return"),
   );
 });
+
+test("摘要列表支持焦点驱动的上下键连续阅读，并保护其他交互状态", () => {
+  const source = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
+  const navigation = source.slice(
+    source.indexOf("function navigatePointRows"),
+    source.indexOf("function createSeekButton"),
+  );
+
+  assert.match(
+    source,
+    /elements\.list\.addEventListener\("keydown", navigatePointRows\)/,
+  );
+  assert.doesNotMatch(
+    source,
+    /document\.addEventListener\("keydown", navigatePointRows\)/,
+  );
+  assert.match(navigation, /event\.key === "ArrowDown"/);
+  assert.match(navigation, /event\.key === "ArrowUp"/);
+  for (const modifier of ["shiftKey", "altKey", "ctrlKey", "metaKey"]) {
+    assert.match(navigation, new RegExp(`event\\.${modifier}`));
+  }
+  assert.match(navigation, /recommendationIsActive\(\)/);
+  assert.match(
+    navigation,
+    /selection && !selection\.isCollapsed && selection\.toString\(\)\.trim\(\)/,
+  );
+  assert.match(
+    navigation,
+    /const currentRow = event\.target\.closest\("\.yvpm-row"\)/,
+  );
+  assert.doesNotMatch(navigation, /state\.expandedRow/);
+
+  assert.ok(
+    navigation.indexOf("recommendationIsActive()") <
+      navigation.indexOf("event.preventDefault()"),
+  );
+  assert.ok(
+    navigation.indexOf("selection.toString().trim()") <
+      navigation.indexOf("event.preventDefault()"),
+  );
+  assert.ok(
+    navigation.indexOf("event.preventDefault()") <
+      navigation.indexOf("const targetRow"),
+  );
+  assert.ok(
+    navigation.indexOf("setFollowPlayback(false)") <
+      navigation.indexOf("setSectionExpanded(targetSection, true)"),
+  );
+  assert.ok(
+    navigation.indexOf("setSectionExpanded(targetSection, true)") <
+      navigation.indexOf("setRowExpanded(targetRow, true)"),
+  );
+  assert.ok(
+    navigation.indexOf("setRowExpanded(targetRow, true)") <
+      navigation.indexOf("focus({ preventScroll: true })"),
+  );
+  assert.ok(
+    navigation.indexOf("focus({ preventScroll: true })") <
+      navigation.indexOf("targetRow.scrollIntoView"),
+  );
+  assert.match(navigation, /if \(targetSection\?\.body\.hidden\)/);
+  assert.doesNotMatch(navigation, /setSectionExpanded\([^,]+, false\)/);
+  assert.match(
+    navigation,
+    /scrollIntoView\(\{ block: "nearest", behavior: "smooth" \}\)/,
+  );
+});

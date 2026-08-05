@@ -2419,6 +2419,47 @@
     return true;
   }
 
+  function navigatePointRows(event) {
+    const direction =
+      event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0;
+    if (
+      !direction ||
+      event.shiftKey ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.metaKey ||
+      recommendationIsActive()
+    ) {
+      return;
+    }
+    const selection = window.getSelection();
+    if (selection && !selection.isCollapsed && selection.toString().trim()) {
+      return;
+    }
+    const currentRow = event.target.closest(".yvpm-row");
+    if (!currentRow) return;
+    event.preventDefault();
+
+    const rows = [...elements.list.querySelectorAll(".yvpm-row")];
+    const currentIndex = rows.indexOf(currentRow);
+    if (currentIndex < 0) return;
+    const targetRow = rows[currentIndex + direction];
+    if (!targetRow) return;
+
+    setFollowPlayback(false);
+    const targetSection = state.sectionViews.find(
+      (view) => view.section === targetRow.closest(".yvpm-section"),
+    );
+    if (targetSection?.body.hidden) {
+      setSectionExpanded(targetSection, true);
+    }
+    if (!setRowExpanded(targetRow, true)) return;
+    targetRow
+      .querySelector(".yvpm-point-toggle")
+      ?.focus({ preventScroll: true });
+    targetRow.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  }
+
   function createSeekButton(point) {
     const seek = document.createElement("button");
     seek.type = "button";
@@ -3451,6 +3492,7 @@
   elements.matchNext.addEventListener("click", () => {
     focusRecommendation(state.recommendationIndex + 1);
   });
+  elements.list.addEventListener("keydown", navigatePointRows);
   elements.explainMenu.addEventListener("mousedown", (event) => {
     event.preventDefault();
   });
