@@ -56,6 +56,8 @@
     receivedChunkIndexes: new Set(),
     totalChunks: 0,
     epoch: 0,
+    activeTabSyncId: 0,
+    activatingTabId: null,
     currentTime: 0,
     currentIndex: -1,
     currentSectionIndex: -1,
@@ -64,6 +66,8 @@
     expandedRow: null,
     followPlayback: false,
     followSeekRequestId: 0,
+    playbackSnapshots: YouTubeSummary.createTabPlaybackSnapshots(),
+    pendingPlaybackRestore: null,
     autoExpandedSection: null,
     recommendationRequestId: 0,
     recommendationIntent: "",
@@ -203,6 +207,13 @@
 
   function tabMessage(message) {
     return new Promise((resolve, reject) => {
+      if (
+        Number.isInteger(state.activatingTabId) &&
+        state.activatingTabId !== state.tabId
+      ) {
+        reject(new Error("标签页正在切换，请稍后再试"));
+        return;
+      }
       if (!state.tabId) {
         reject(new Error("打开一个 YouTube 视频即可生成观点地图"));
         return;
@@ -2352,6 +2363,10 @@
       : "点击后从当前播放位置开始跟随";
   }
 
+  function invalidateFollowSeekRequests() {
+    state.followSeekRequestId += 1;
+  }
+
   function setFollowPlayback(enabled, { sync = false } = {}) {
     const nextEnabled = Boolean(enabled);
     if (nextEnabled && recommendationIsActive()) {
@@ -2360,13 +2375,29 @@
     }
     state.followPlayback = nextEnabled;
     if (!nextEnabled) {
-      state.followSeekRequestId += 1;
+      invalidateFollowSeekRequests();
       state.autoExpandedSection = null;
     }
     updateFollowPlaybackControl();
     if (nextEnabled && sync) {
       updateNowPlaying({ follow: true, forceFollow: true });
     }
+  }
+
+  function saveActivePlaybackSnapshot() {
+    if (!Number.isInteger(state.tabId) || !state.videoId) return null;
+    const pending = state.pendingPlaybackRestore;
+    if (
+      pending?.tabId === state.tabId &&
+      pending.videoId === state.videoId &&
+      pending.epoch === state.epoch
+    ) {
+      return state.playbackSnapshots.get(state.tabId, state.videoId);
+    }
+    return state.playbackSnapshots.save(state.tabId, state.videoId, {
+      followPlayback: state.followPlayback,
+      anchor: state.followPlayback ? null : captureReadingAnchor(),
+    });
   }
 
   function collapseExpandedRow(except = null) {
@@ -2674,6 +2705,15 @@
     ) || null;
   }
 
+  function finishSummaryRender(anchor) {
+    updateNowPlaying({
+      follow: state.followPlayback,
+      forceFollow: state.followPlayback,
+    });
+    if (state.followPlayback) return null;
+    return applyReadingAnchor(anchor);
+  }
+
   function applyReadingAnchor(anchor) {
     if (!anchor?.key) return null;
     const row = findRenderedPointRow(anchor.key);
@@ -2703,7 +2743,7 @@
       renderIntentControls(summary);
       if (elements.overview.hidden) showOverviewError();
       void showClippingHintOnce();
-      return applyReadingAnchor(anchor);
+      return finishSummaryRender(anchor);
     }
     state.sectionGroups = groups;
     state.points = groups.flatMap((group) => group.points);
@@ -2720,9 +2760,8 @@
     setListHeading("关键章节", `${groups.length} 个章节`);
     renderIntentControls(summary);
     if (elements.overview.hidden) showOverviewError();
-    updateNowPlaying({ follow: false });
     void showClippingHintOnce();
-    return applyReadingAnchor(anchor);
+    return finishSummaryRender(anchor);
   }
 
   function readingViewportTop() {
@@ -2761,6 +2800,29 @@
     }
   }
 
+  function applyPendingPlaybackRestore() {
+    const pending = state.pendingPlaybackRestore;
+    if (!pending) return false;
+    if (
+      pending.tabId !== state.tabId ||
+      pending.videoId !== state.videoId ||
+      pending.epoch !== state.epoch
+    ) {
+      state.pendingPlaybackRestore = null;
+      return false;
+    }
+    if (!state.points.length) return false;
+
+    state.pendingPlaybackRestore = null;
+    if (pending.followPlayback) {
+      setFollowPlayback(true, { sync: true });
+      return true;
+    }
+    const row = applyReadingAnchor(pending.anchor);
+    restoreReadingAnchor(pending.anchor, row);
+    return true;
+  }
+
   function finalizeGeneratedSummary(summary, generationId) {
     const finalizationKey = String(
       generationId || state.activeGenerationId || "",
@@ -2768,7 +2830,7 @@
     if (!finalizationKey || state.finalizedGenerationId === finalizationKey) {
       return false;
     }
-    const anchor = captureReadingAnchor();
+    const anchor = state.followPlayback ? null : captureReadingAnchor();
     const restoredRow = renderSummary(summary, { anchor });
     state.loaded = true;
     state.loading = false;
@@ -2776,12 +2838,12 @@
     setGeneratingVisible(false);
     setStatus("");
     restoreReadingAnchor(anchor, restoredRow);
+    applyPendingPlaybackRestore();
     state.finalizedGenerationId = finalizationKey;
     return true;
   }
 
   function clearPoints({ preserveOverview = false } = {}) {
-    setFollowPlayback(false);
     hideExplainMenu();
     if (!state.explanationDrawerOpen) clearCapturedSelection();
     clearRecommendation({ restoreSections: false, clearInput: true });
@@ -2810,6 +2872,8 @@
   }
 
   function showEmpty() {
+    setFollowPlayback(false);
+    state.pendingPlaybackRestore = null;
     hidePrepare();
     setGeneratingVisible(false);
     clearPoints();
@@ -2817,22 +2881,42 @@
     elements.empty.hidden = false;
   }
 
-  function switchToVideo(videoId, currentTime = 0, videoTitle = "") {
+  function switchToVideo({
+    tabId = state.tabId,
+    videoId = "",
+    currentTime,
+    videoTitle = "",
+  } = {}) {
+    const nextTabId = Number.isInteger(tabId) ? tabId : null;
+    const nextVideoId = String(videoId || "");
+    state.activatingTabId = null;
     if (
-      videoId &&
-      state.videoId === videoId &&
+      nextVideoId &&
+      state.tabId === nextTabId &&
+      state.videoId === nextVideoId &&
       (state.loading || state.loaded || state.preparing)
     ) {
       if (videoTitle) state.videoTitle = videoTitle;
-      state.currentTime = Number(currentTime) || state.currentTime;
-      updateNowPlaying({ follow: false });
+      state.currentTime = YouTubeSummary.playbackTimeOr(
+        currentTime,
+        state.currentTime,
+      );
+      updateNowPlaying({
+        follow: state.followPlayback,
+        forceFollow: state.followPlayback,
+      });
       return;
     }
+    const restoreSnapshot = nextVideoId
+      ? state.playbackSnapshots.get(nextTabId, nextVideoId)
+      : null;
     resetExplanationContext();
+    state.activeTabSyncId += 1;
     state.epoch += 1;
-    state.videoId = videoId || "";
-    state.videoTitle = videoId
-      ? String(videoTitle || "").trim() || `YouTube 视频 ${videoId}`
+    state.tabId = nextTabId;
+    state.videoId = nextVideoId;
+    state.videoTitle = nextVideoId
+      ? String(videoTitle || "").trim() || `YouTube 视频 ${nextVideoId}`
       : "";
     state.loaded = false;
     state.loading = false;
@@ -2842,14 +2926,23 @@
     state.activeOverviewGenerationId = "";
     state.overviewCaptions = null;
     state.overviewRetrying = false;
-    state.currentTime = Number(currentTime) || 0;
-    hidePrepare();
-    setGeneratingVisible(false);
-    clearPoints();
+    state.currentTime = YouTubeSummary.playbackTimeOr(currentTime, 0);
+    state.pendingPlaybackRestore = restoreSnapshot
+      ? {
+          ...restoreSnapshot,
+          tabId: nextTabId,
+          videoId: nextVideoId,
+          epoch: state.epoch,
+        }
+      : null;
     if (!state.videoId) {
       showEmpty();
       return;
     }
+    setFollowPlayback(false);
+    hidePrepare();
+    setGeneratingVisible(false);
+    clearPoints();
     elements.empty.hidden = true;
     setStatus("正在准备摘要…");
     loadSummary();
@@ -2942,6 +3035,7 @@
       elements.generationCopy.textContent = "正在排队等待生成…";
     }
     mergePoints(task.points || [], false);
+    applyPendingPlaybackRestore();
     state.receivedChunkIndexes = new Set(task.receivedChunkIndexes || []);
     state.totalChunks = Number(task.totalChunks) || 0;
     updateProgress(undefined, state.totalChunks);
@@ -3061,6 +3155,7 @@
       }
       if (cached.summary) {
         renderSummary(cached.summary);
+        applyPendingPlaybackRestore();
         state.loaded = true;
         hideProgress();
         setStatus("");
@@ -3133,50 +3228,48 @@
     }
   }
 
-  async function useActiveTab() {
-    const epoch = ++state.epoch;
-    state.loaded = false;
-    state.loading = false;
-    state.preparing = false;
-    state.activeGenerationId = "";
-    state.finalizedGenerationId = "";
-    state.activeOverviewGenerationId = "";
-    state.overviewCaptions = null;
-    state.overviewRetrying = false;
-    hidePrepare();
-    setGeneratingVisible(false);
-    clearPoints();
-    setStatus("");
+  async function useActiveTab({ snapshotCurrent = true } = {}) {
+    if (snapshotCurrent) saveActivePlaybackSnapshot();
+    const syncId = ++state.activeTabSyncId;
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (epoch !== state.epoch) return;
-    state.tabId = tab?.id || null;
-    state.videoTitle = String(tab?.title || "")
+    if (syncId !== state.activeTabSyncId) return;
+    const nextTabId = Number.isInteger(tab?.id) ? tab.id : null;
+    const nextVideoTitle = String(tab?.title || "")
       .replace(/\s*-\s*YouTube\s*$/i, "")
       .trim();
-    if (!state.tabId) {
-      state.videoId = "";
-      showEmpty();
+    if (!nextTabId) {
+      switchToVideo({ tabId: null });
       return;
     }
     try {
-      const response = await tabMessage({ type: "GET_VIDEO_STATE" });
-      if (epoch !== state.epoch) return;
+      const response = await tabMessageTo(nextTabId, {
+        type: "GET_VIDEO_STATE",
+      });
+      if (syncId !== state.activeTabSyncId) return;
       if (!response?.ok || !response.videoId) {
-        switchToVideo("");
+        switchToVideo({ tabId: nextTabId });
         return;
       }
-      switchToVideo(
-        response.videoId,
-        response.currentTime,
-        response.videoTitle || state.videoTitle,
-      );
+      switchToVideo({
+        tabId: nextTabId,
+        videoId: response.videoId,
+        currentTime: response.currentTime,
+        videoTitle: response.videoTitle || nextVideoTitle,
+      });
     } catch {
-      if (epoch !== state.epoch) return;
-      switchToVideo("");
+      if (syncId !== state.activeTabSyncId) return;
+      switchToVideo({ tabId: nextTabId });
     }
   }
 
-  function handleActiveTabChanged() {
+  function handleActiveTabChanged(activeInfo) {
+    if (
+      Number.isInteger(activeInfo?.tabId) &&
+      activeInfo.tabId !== state.tabId
+    ) {
+      state.activatingTabId = activeInfo.tabId;
+      invalidateFollowSeekRequests();
+    }
     useActiveTab();
   }
 
@@ -3202,6 +3295,7 @@
       message.targetLanguage === state.targetLanguage
     ) {
       mergePoints(message.points, true);
+      applyPendingPlaybackRestore();
       updateProgress(message.index, message.total);
       setStatus("");
       return;
@@ -3297,14 +3391,22 @@
       message?.type === "VIDEO_CHANGED" &&
       sender.tab?.id === state.tabId
     ) {
-      switchToVideo(message.videoId, 0, message.videoTitle);
+      switchToVideo({
+        tabId: sender.tab.id,
+        videoId: message.videoId,
+        currentTime: 0,
+        videoTitle: message.videoTitle,
+      });
     }
   });
 
   chrome.tabs.onActivated.addListener(handleActiveTabChanged);
   chrome.tabs.onRemoved.addListener((tabId) => {
+    state.playbackSnapshots.remove(tabId);
     if (tabId !== state.tabId) return;
-    useActiveTab();
+    state.activatingTabId = -1;
+    invalidateFollowSeekRequests();
+    useActiveTab({ snapshotCurrent: false });
   });
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (tabId !== state.tabId) return;
@@ -3316,7 +3418,11 @@
     if (changeInfo.url) {
       const videoId = YouTubeSummary.getVideoId(changeInfo.url);
       if (videoId) {
-        switchToVideo(videoId, 0, state.videoTitle);
+        switchToVideo({
+          tabId,
+          videoId,
+          videoTitle: state.videoTitle,
+        });
         return;
       }
     }
@@ -3330,6 +3436,7 @@
     runRecommendation(elements.intentInput.value);
   });
   elements.followPlayback.addEventListener("click", () => {
+    state.pendingPlaybackRestore = null;
     setFollowPlayback(!state.followPlayback, {
       sync: !state.followPlayback,
     });

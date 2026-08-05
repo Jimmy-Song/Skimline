@@ -5,6 +5,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
 const {
+  createTabPlaybackSnapshots,
   dedupePointsByTimestamp,
   findReadingAnchorRow,
   findCurrentPointIndex,
@@ -15,12 +16,53 @@ const {
   groupPointsBySections,
   mergePointsByTimestamp,
   normalizeTextScale,
+  playbackTimeOr,
   pointIdentity,
   pointStableKey,
   reconcileLibraryExpansion,
   seekVideo,
   transitionLibrarySearchExpansion,
 } = require("../ui-utils.js");
+
+test("播放快照按标签页保存、校验视频并在视频不匹配时失效", () => {
+  const snapshots = createTabPlaybackSnapshots();
+  const anchor = { key: "video-a:88", top: 120, expanded: true };
+
+  assert.equal(snapshots.save(null, "video-a", {}), null);
+  assert.equal(snapshots.save(7, "", {}), null);
+  assert.deepEqual(
+    snapshots.save(7, "video-a", {
+      followPlayback: false,
+      anchor,
+    }),
+    { videoId: "video-a", followPlayback: false, anchor },
+  );
+  assert.deepEqual(snapshots.get(7, "video-a"), {
+    videoId: "video-a",
+    followPlayback: false,
+    anchor,
+  });
+
+  assert.equal(snapshots.get(7, "video-b"), null);
+  assert.equal(snapshots.get(7, "video-a"), null);
+});
+
+test("播放快照恢复后继续保留，并可按标签页删除", () => {
+  const snapshots = createTabPlaybackSnapshots();
+  snapshots.save(9, "video-a", { followPlayback: true });
+
+  assert.equal(snapshots.get(9, "video-a")?.followPlayback, true);
+  assert.equal(snapshots.get(9, "video-a")?.followPlayback, true);
+  assert.equal(snapshots.remove(9), true);
+  assert.equal(snapshots.get(9, "video-a"), null);
+});
+
+test("播放时间区分真实零秒和未提供的时间", () => {
+  assert.equal(playbackTimeOr(0, 88), 0);
+  assert.equal(playbackTimeOr(undefined, 88), 88);
+  assert.equal(playbackTimeOr("12.5", 88), 12.5);
+  assert.equal(playbackTimeOr(-4, 88), 0);
+});
 
 test("只从 YouTube watch URL 读取 videoId", () => {
   assert.equal(getVideoId("https://www.youtube.com/watch?v=abc123&t=20"), "abc123");

@@ -6,10 +6,30 @@
     videoId: YouTubeSummary.getVideoId(),
     videoElement: null,
     lastPlaybackSentAt: 0,
+    lastContentPlaybackTime: 0,
+    lastContentDuration: 0,
     captionCache: new Map(),
     captionRequests: new Map(),
   };
   const MAX_CACHED_CAPTION_VIDEOS = 3;
+
+  function isAdPlaying() {
+    const player = document.querySelector("#movie_player");
+    return Boolean(
+      player?.classList?.contains("ad-showing") ||
+        player?.classList?.contains("ad-interrupting"),
+    );
+  }
+
+  function rememberContentPlayback(video) {
+    if (!video || isAdPlaying()) return;
+    if (Number.isFinite(video.currentTime)) {
+      state.lastContentPlaybackTime = Math.max(0, video.currentTime);
+    }
+    if (Number.isFinite(video.duration)) {
+      state.lastContentDuration = Math.max(0, Math.floor(video.duration));
+    }
+  }
 
   function notify(message) {
     try {
@@ -122,10 +142,11 @@
     if (!segments.length) throw new Error("字幕内容为空，暂时无法生成");
 
     const video = document.querySelector("video");
+    rememberContentPlayback(video);
     const result = {
       supported: true,
       videoId: requestedVideoId,
-      duration: Number.isFinite(video?.duration) ? Math.floor(video.duration) : 0,
+      duration: state.lastContentDuration,
       sourceLang: track?.languageCode || captionInfo.sourceLang || "",
       segments,
     };
@@ -155,28 +176,30 @@
 
   function getVideoState() {
     const video = document.querySelector("video");
+    rememberContentPlayback(video);
     const videoId = YouTubeSummary.getVideoId();
     const videoTitle = String(document.title || "")
       .replace(/\s*-\s*YouTube\s*$/i, "")
       .trim();
     return {
       videoId,
-      duration: Number.isFinite(video?.duration) ? Math.floor(video.duration) : 0,
-      currentTime: Number.isFinite(video?.currentTime) ? video.currentTime : 0,
+      duration: state.lastContentDuration,
+      currentTime: state.lastContentPlaybackTime,
       videoTitle,
     };
   }
 
   function reportPlayback(force = false) {
     const video = state.videoElement;
-    if (!video || !state.videoId) return;
+    if (!video || !state.videoId || isAdPlaying()) return;
+    rememberContentPlayback(video);
     const now = Date.now();
     if (!force && now - state.lastPlaybackSentAt < 500) return;
     state.lastPlaybackSentAt = now;
     notify({
       type: "PLAYBACK_TIME",
       videoId: state.videoId,
-      currentTime: Number(video.currentTime) || 0,
+      currentTime: state.lastContentPlaybackTime,
     });
   }
 
@@ -193,6 +216,8 @@
     const nextVideoId = YouTubeSummary.getVideoId();
     if (nextVideoId !== state.videoId) {
       state.videoId = nextVideoId;
+      state.lastContentPlaybackTime = 0;
+      state.lastContentDuration = 0;
       const videoTitle = String(document.title || "")
         .replace(/\s*-\s*YouTube\s*$/i, "")
         .trim();

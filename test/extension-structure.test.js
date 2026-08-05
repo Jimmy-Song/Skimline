@@ -294,7 +294,10 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.equal(source.match(/seekWithFeedback\(/g)?.length, 4);
   assert.match(source, /message\?\.type === "PLAYBACK_TIME"/);
   assert.match(source, /message\?\.type === "VIDEO_CHANGED"/);
-  assert.match(source, /switchToVideo\(message\.videoId/);
+  assert.match(
+    source,
+    /switchToVideo\(\{[\s\S]*?tabId: sender\.tab\.id,[\s\S]*?videoId: message\.videoId/,
+  );
   assert.match(source, /YouTubeSummary\.getVideoId\(changeInfo\.url\)/);
   assert.match(source, /scrollIntoView\(\{ block: "nearest", behavior: "smooth" \}\)/);
   assert.match(source, /collapseExpandedRow\(row\)/);
@@ -563,11 +566,61 @@ test("播放跟随是可见二态开关，并覆盖跨章节、推荐和 DOM 生
     source.indexOf("function clearPoints"),
     source.indexOf("function showEmpty"),
   );
+  const showEmpty = source.slice(
+    source.indexOf("function showEmpty"),
+    source.indexOf("function switchToVideo"),
+  );
   const openLibrary = source.slice(
     source.indexOf("function openLibrary"),
     source.indexOf("function closeLibrary"),
   );
-  assert.match(clearPoints, /setFollowPlayback\(false\)/);
+  assert.doesNotMatch(clearPoints, /setFollowPlayback\(false\)/);
   assert.match(clearPoints, /state\.autoExpandedSection = null/);
+  assert.match(showEmpty, /setFollowPlayback\(false\)/);
   assert.match(openLibrary, /setFollowPlayback\(false\)/);
+});
+
+test("活动标签切换保存并恢复跟随状态，且不使同上下文生成任务失效", () => {
+  const source = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
+  const switchToVideo = source.slice(
+    source.indexOf("function switchToVideo"),
+    source.indexOf("function showLoadError"),
+  );
+  const useActiveTab = source.slice(
+    source.indexOf("async function useActiveTab"),
+    source.indexOf("function handleActiveTabChanged"),
+  );
+  const finishSummaryRender = source.slice(
+    source.indexOf("function finishSummaryRender"),
+    source.indexOf("function applyReadingAnchor"),
+  );
+  const removedListener = source.slice(
+    source.indexOf("chrome.tabs.onRemoved.addListener"),
+    source.indexOf("chrome.tabs.onUpdated.addListener"),
+  );
+
+  assert.match(source, /createTabPlaybackSnapshots\(\)/);
+  assert.match(source, /function saveActivePlaybackSnapshot/);
+  assert.match(useActiveTab, /saveActivePlaybackSnapshot\(\)/);
+  assert.match(useActiveTab, /const syncId = \+\+state\.activeTabSyncId/);
+  assert.match(useActiveTab, /tabMessageTo\(nextTabId/);
+  assert.doesNotMatch(useActiveTab, /state\.epoch|clearPoints\(\)/);
+  assert.match(source, /state\.activatingTabId !== state\.tabId/);
+  assert.match(switchToVideo, /state\.tabId === nextTabId/);
+  assert.match(switchToVideo, /state\.videoId === nextVideoId/);
+  assert.match(switchToVideo, /state\.epoch \+= 1/);
+  assert.match(
+    switchToVideo,
+    /YouTubeSummary\.playbackTimeOr\([\s\S]*?currentTime,[\s\S]*?state\.currentTime/,
+  );
+  assert.match(switchToVideo, /setFollowPlayback\(false\)/);
+  assert.match(switchToVideo, /pendingPlaybackRestore = restoreSnapshot/);
+  assert.match(source, /function invalidateFollowSeekRequests/);
+  assert.match(source, /pending\?\.tabId === state\.tabId/);
+  assert.match(finishSummaryRender, /forceFollow: state\.followPlayback/);
+  assert.match(finishSummaryRender, /if \(state\.followPlayback\) return null/);
+  assert.ok(
+    removedListener.indexOf("state.playbackSnapshots.remove(tabId)") <
+      removedListener.indexOf("if (tabId !== state.tabId) return"),
+  );
 });
