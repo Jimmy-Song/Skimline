@@ -8,6 +8,29 @@ const { execFileSync } = require("node:child_process");
 
 const root = path.join(__dirname, "..");
 
+test("当前版本在 GitHub 版本日志中有独立需求说明", () => {
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(root, "manifest.json"), "utf8"),
+  );
+  const readme = fs.readFileSync(path.join(root, "README.md"), "utf8");
+  const changelog = fs.readFileSync(
+    path.join(root, "CHANGELOG.md"),
+    "utf8",
+  );
+
+  assert.match(readme, /\[查看按版本整理的新增功能与重要修复\]\(CHANGELOG\.md\)/);
+  const versionHeading = `## Skimline ${manifest.version}`;
+  const versionStart = changelog.indexOf(versionHeading);
+  assert.notEqual(versionStart, -1, `版本日志缺少 ${versionHeading}`);
+  const nextVersionStart = changelog.indexOf("\n## Skimline ", versionStart + 1);
+  const currentVersionNotes = changelog.slice(
+    versionStart,
+    nextVersionStart === -1 ? changelog.length : nextVersionStart,
+  );
+  assert.match(currentVersionNotes, /### 新增需求/);
+  assert.match(currentVersionNotes, /\n- .+/);
+});
+
 test("当前版本发布包完整、可解压且不包含旧页面注入脚本", () => {
   const manifest = JSON.parse(
     fs.readFileSync(path.join(root, "manifest.json"), "utf8"),

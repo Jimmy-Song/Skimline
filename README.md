@@ -4,12 +4,14 @@
 
 Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中，把 YouTube 长访谈、播客和演讲整理成可展开、可跳转的观点地图。摘要语言可在生成前选择，也可以在生成过程中切换。原生 JavaScript、无后端，DeepSeek API Key 只保存在用户本机的 `chrome.storage.local`。
 
+[查看按版本整理的新增功能与重要修复](CHANGELOG.md)
+
 ## 下载与安装
 
 如果你只想安装扩展：
 
-1. 下载 `releases/skimline-0.4.0-extension.zip`。
-2. 解压 ZIP，并进入其中的 `skimline-0.4.0` 目录。
+1. 下载 `releases/skimline-0.4.1-extension.zip`。
+2. 解压 ZIP，并进入其中的 `skimline-0.4.1` 目录。
 3. 打开 Chrome，在地址栏输入 `chrome://extensions`。
 4. 打开右上角“开发者模式”。
 5. 点击“加载已解压的扩展程序”，选择解压后的项目目录。
@@ -72,7 +74,7 @@ npm run build:release
 ```bash
 npm test
 npm run build:release
-unzip -t releases/skimline-0.4.0-extension.zip
+unzip -t releases/skimline-0.4.1-extension.zip
 git ls-files -z | xargs -0 rg -n "(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer [A-Za-z0-9._-]{20,})" -S
 ```
 

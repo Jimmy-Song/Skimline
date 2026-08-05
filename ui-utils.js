@@ -275,7 +275,46 @@
     return current;
   }
 
+  function createTabPlaybackSnapshots() {
+    const snapshots = new Map();
+
+    return {
+      save(tabId, videoId, snapshot = {}) {
+        const normalizedVideoId = String(videoId || "");
+        if (!Number.isInteger(tabId) || !normalizedVideoId) return null;
+        const saved = {
+          videoId: normalizedVideoId,
+          followPlayback: Boolean(snapshot.followPlayback),
+          anchor: snapshot.anchor || null,
+        };
+        snapshots.set(tabId, saved);
+        return saved;
+      },
+
+      get(tabId, videoId) {
+        if (!Number.isInteger(tabId)) return null;
+        const saved = snapshots.get(tabId) || null;
+        if (!saved) return null;
+        if (saved.videoId !== String(videoId || "")) {
+          snapshots.delete(tabId);
+          return null;
+        }
+        return saved;
+      },
+
+      remove(tabId) {
+        return snapshots.delete(tabId);
+      },
+    };
+  }
+
+  function playbackTimeOr(currentTime, fallback = 0) {
+    const time = Number(currentTime);
+    return Number.isFinite(time) ? Math.max(0, time) : fallback;
+  }
+
   const api = {
+    createTabPlaybackSnapshots,
     dedupePointsByTimestamp,
     findReadingAnchorRow,
     findCurrentPointIndex,
@@ -286,6 +325,7 @@
     groupPointsBySections,
     mergePointsByTimestamp,
     normalizeTextScale,
+    playbackTimeOr,
     pointIdentity,
     pointStableKey,
     reconcileLibraryExpansion,
