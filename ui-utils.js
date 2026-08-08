@@ -125,6 +125,79 @@
     return String(value || "").replace(/\s+/g, " ").trim().toLocaleLowerCase();
   }
 
+  function normalizePointQueryText(value) {
+    return String(value || "")
+      .normalize("NFKC")
+      .toLocaleLowerCase()
+      .replace(/\s+/g, " ")
+      .trim();
+  }
+
+  function isAsciiAlphaNumeric(character) {
+    return Boolean(character) && /[a-z0-9]/.test(character);
+  }
+
+  function countPointQueryToken(text, token) {
+    if (!text || !token) return 0;
+    // v1 没有关键词高亮：拉丁数字词优先避免 code → codex 这类不可见误报。
+    // 高亮或实时预览落地后，应根据实际查询行为重新评估前缀匹配。
+    const requiresWordBoundary = /^[a-z0-9]+$/.test(token);
+    let count = 0;
+    let offset = 0;
+    while (offset <= text.length - token.length) {
+      const index = text.indexOf(token, offset);
+      if (index < 0) break;
+      const before = index > 0 ? text[index - 1] : "";
+      const after = text[index + token.length] || "";
+      if (
+        !requiresWordBoundary ||
+        (!isAsciiAlphaNumeric(before) && !isAsciiAlphaNumeric(after))
+      ) {
+        count += 1;
+      }
+      offset = index + Math.max(1, token.length);
+    }
+    return count;
+  }
+
+  function rankPointsByQuery(points, rawQuery) {
+    const query = normalizePointQueryText(rawQuery);
+    if (!query) return [];
+    const tokens = [...new Set(query.split(" ").filter(Boolean))];
+    if (!tokens.length) return [];
+
+    return (points || [])
+      .filter((point) => Number.isFinite(Number(point?.t)))
+      .map((point) => {
+        const pointText = normalizePointQueryText(point?.point);
+        const detailText = normalizePointQueryText(point?.detail);
+        const tokenMatches = tokens.map((token) => ({
+          pointCount: countPointQueryToken(pointText, token),
+          detailCount: countPointQueryToken(detailText, token),
+        }));
+        if (
+          tokenMatches.some(
+            ({ pointCount, detailCount }) => pointCount + detailCount === 0,
+          )
+        ) {
+          return null;
+        }
+        return {
+          t: Math.max(0, Math.floor(Number(point.t))),
+          score: tokenMatches.reduce(
+            (total, { pointCount, detailCount }) =>
+              total + pointCount * 3 + detailCount,
+            0,
+          ),
+          allTermsInPoint: tokenMatches.every(
+            ({ pointCount }) => pointCount > 0,
+          ),
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => b.score - a.score || a.t - b.t);
+  }
+
   function transitionLibrarySearchExpansion(
     {
       expandedVideoIds,
@@ -328,6 +401,7 @@
     playbackTimeOr,
     pointIdentity,
     pointStableKey,
+    rankPointsByQuery,
     reconcileLibraryExpansion,
     seekVideo,
     transitionLibrarySearchExpansion,

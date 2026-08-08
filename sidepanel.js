@@ -75,6 +75,11 @@
     recommendationRows: [],
     recommendationIndex: -1,
     recommendationPreviousExpanded: null,
+    recommendationLocalMatches: new Map(),
+    recommendationLocalCount: 0,
+    recommendationAiAddedCount: 0,
+    recommendationSupplementStatus: "idle",
+    recommendationAutoExpandedRow: null,
     defaultRecommendationRequestId: 0,
     defaultRecommendations: [],
     explanationClientId:
@@ -132,6 +137,7 @@
     intentFeedback: document.querySelector("#yvpm-intent-feedback"),
     matchbar: document.querySelector("#yvpm-matchbar"),
     matchbarText: document.querySelector("#yvpm-matchbar-text"),
+    matchRelated: document.querySelector("#yvpm-match-related"),
     matchClear: document.querySelector("#yvpm-match-clear"),
     matchPrev: document.querySelector("#yvpm-match-prev"),
     matchNext: document.querySelector("#yvpm-match-next"),
@@ -2044,6 +2050,12 @@
     invalidate = true,
   } = {}) {
     if (invalidate) state.recommendationRequestId += 1;
+    if (
+      state.recommendationAutoExpandedRow &&
+      state.expandedRow === state.recommendationAutoExpandedRow
+    ) {
+      setRowExpanded(state.recommendationAutoExpandedRow, false);
+    }
     for (const row of state.recommendationRows) {
       row.classList.remove("yvpm-recommended", "yvpm-recommendation-focus");
     }
@@ -2053,7 +2065,15 @@
     state.recommendationRows = [];
     state.recommendationIndex = -1;
     state.recommendationPreviousExpanded = null;
+    state.recommendationLocalMatches.clear();
+    state.recommendationLocalCount = 0;
+    state.recommendationAiAddedCount = 0;
+    state.recommendationSupplementStatus = "idle";
+    state.recommendationAutoExpandedRow = null;
     elements.matchbar.hidden = true;
+    elements.matchRelated.hidden = true;
+    elements.matchRelated.disabled = false;
+    elements.matchRelated.textContent = "查找相关观点";
     elements.panel?.classList.remove("yvpm-has-matches");
     elements.intentChips.classList.remove("yvpm-intent-chips-muted");
     setActiveIntentChip("");
@@ -2067,7 +2087,7 @@
     );
   }
 
-  function focusRecommendation(index) {
+  function focusRecommendation(index, { scroll = true } = {}) {
     if (!state.recommendationRows.length) return;
     const length = state.recommendationRows.length;
     state.recommendationIndex = (index + length) % length;
@@ -2075,34 +2095,89 @@
       row.classList.remove("yvpm-recommendation-focus");
     }
     const row = state.recommendationRows[state.recommendationIndex];
+    const timestamp = Math.max(0, Math.floor(Number(row.dataset.t) || 0));
+    const localMatch = state.recommendationLocalMatches.get(timestamp);
+    const needsDetail = localMatch && !localMatch.allTermsInPoint;
+    if (
+      !needsDetail &&
+      state.recommendationAutoExpandedRow &&
+      state.expandedRow === state.recommendationAutoExpandedRow
+    ) {
+      setRowExpanded(state.recommendationAutoExpandedRow, false);
+      state.recommendationAutoExpandedRow = null;
+    }
+    if (needsDetail) {
+      const alreadyExpanded = state.expandedRow === row;
+      const alreadyOwned = state.recommendationAutoExpandedRow === row;
+      if (setRowExpanded(row, true)) {
+        state.recommendationAutoExpandedRow =
+          !alreadyExpanded || alreadyOwned ? row : null;
+      }
+    }
     row.classList.add("yvpm-recommendation-focus");
-    row.scrollIntoView({ block: "center", behavior: "smooth" });
+    if (scroll) {
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+    }
   }
 
-  function renderMatchbar(intent, count) {
-    const prefix = document.createTextNode("已为“");
+  function renderMatchbar(intent, count, source = state.recommendationSource) {
+    const isLocalResult = source === "local" || source === "hybrid";
+    const prefix = document.createTextNode(isLocalResult ? "“" : "已为“");
     const intentStrong = document.createElement("strong");
     intentStrong.textContent = intent;
-    const middle = document.createTextNode("”找到 ");
-    const countStrong = document.createElement("strong");
-    countStrong.textContent = String(count);
-    const suffix = document.createTextNode(" 个观点");
-    elements.matchbarText.replaceChildren(
-      prefix,
-      intentStrong,
-      middle,
-      countStrong,
-      suffix,
+    const middle = document.createTextNode(
+      isLocalResult ? "”命中 " : "”找到 ",
     );
+    const countStrong = document.createElement("strong");
+    countStrong.textContent = String(
+      isLocalResult ? state.recommendationLocalCount : count,
+    );
+    const suffix = document.createTextNode(" 个观点");
+    const content = [prefix, intentStrong, middle, countStrong, suffix];
+    if (source === "hybrid") {
+      content.push(
+        document.createTextNode(
+          state.recommendationAiAddedCount
+            ? ` · AI 补充 ${state.recommendationAiAddedCount} 个`
+            : " · AI 没有找到额外相关的观点",
+        ),
+      );
+    }
+    elements.matchbarText.replaceChildren(...content);
+    const canSupplement = source === "local";
+    elements.matchRelated.hidden = !canSupplement;
+    elements.matchRelated.disabled =
+      state.recommendationSupplementStatus === "loading";
+    elements.matchRelated.textContent =
+      state.recommendationSupplementStatus === "loading"
+        ? "正在查找…"
+        : "查找相关观点";
+    elements.matchbar.classList.toggle("yvpm-matchbar-local", isLocalResult);
     elements.matchbar.hidden = false;
     elements.panel?.classList.add("yvpm-has-matches");
   }
 
-  function applyRecommendation(intent, pointTs, { source = "custom" } = {}) {
+  function applyRecommendation(
+    intent,
+    pointTs,
+    {
+      source = "custom",
+      limit = 4,
+      initialT = null,
+      preserveFocusT = null,
+    } = {},
+  ) {
+    const hasPreservedFocus =
+      preserveFocusT !== null &&
+      preserveFocusT !== undefined &&
+      Number.isFinite(Number(preserveFocusT));
+    const preservedReadingAnchor = hasPreservedFocus
+      ? captureReadingAnchor()
+      : null;
     const recommendationRows = (Array.isArray(pointTs) ? pointTs : [])
       .map(getPointRow)
       .filter(Boolean)
-      .slice(0, 4);
+      .slice(0, limit);
     if (!recommendationRows.length) return false;
     state.recommendationIntent = intent;
     state.recommendationSource = source;
@@ -2121,11 +2196,37 @@
     }
     elements.intentChips.classList.toggle(
       "yvpm-intent-chips-muted",
-      source === "custom",
+      source !== "default",
     );
     setActiveIntentChip(intent);
-    renderMatchbar(intent, state.recommendationRows.length);
-    focusRecommendation(0);
+    renderMatchbar(intent, state.recommendationRows.length, source);
+    const hasInitialTarget =
+      initialT !== null &&
+      initialT !== undefined &&
+      Number.isFinite(Number(initialT));
+    const targetT = hasPreservedFocus
+      ? Math.max(0, Math.floor(Number(preserveFocusT)))
+      : hasInitialTarget
+        ? Math.max(0, Math.floor(Number(initialT)))
+        : null;
+    const targetIndex =
+      targetT === null
+        ? 0
+        : Math.max(
+            0,
+            state.recommendationRows.findIndex(
+              (row) => Number(row.dataset.t) === targetT,
+            ),
+          );
+    focusRecommendation(targetIndex, {
+      scroll: !hasPreservedFocus,
+    });
+    if (preservedReadingAnchor) {
+      restoreReadingAnchor(
+        preservedReadingAnchor,
+        findRenderedPointRow(preservedReadingAnchor.key),
+      );
+    }
     return true;
   }
 
@@ -2163,16 +2264,39 @@
     }
 
     setFollowPlayback(false);
-    clearRecommendation({ restoreSections: true, invalidate: false });
+    clearRecommendation({ restoreSections: true });
     state.recommendationPreviousExpanded = state.sectionViews.map(
       (view) => !view.body.hidden,
     );
-    const requestId = ++state.recommendationRequestId;
+    const localMatches = YouTubeSummary.rankPointsByQuery(state.points, intent);
+    if (localMatches.length) {
+      state.recommendationLocalMatches = new Map(
+        localMatches.map((match) => [match.t, match]),
+      );
+      state.recommendationLocalCount = localMatches.length;
+      state.recommendationAiAddedCount = 0;
+      state.recommendationSupplementStatus = "idle";
+      elements.intentInput.value = intent;
+      setIntentFeedback("");
+      const chronologicalTs = localMatches
+        .map((match) => match.t)
+        .sort((a, b) => a - b);
+      applyRecommendation(intent, chronologicalTs, {
+        source: "local",
+        limit: Infinity,
+        initialT: localMatches[0].t,
+      });
+      return;
+    }
+    const requestId = state.recommendationRequestId;
     const videoId = state.videoId;
     elements.intentInput.value = intent;
     setActiveIntentChip(intent);
     setIntentBusy(true);
-    setIntentFeedback("正在匹配现有摘要中的相关观点…", "loading");
+    setIntentFeedback(
+      `摘要中没有直接提到“${intent}”，正在按语义匹配…`,
+      "loading",
+    );
     try {
       const response = await runtimeMessage({
         type: "MATCH_SUMMARY_INTENT",
@@ -2221,6 +2345,81 @@
     }
   }
 
+  async function runSemanticSupplement() {
+    const intent = state.recommendationIntent;
+    if (
+      !intent ||
+      state.recommendationSource !== "local" ||
+      state.recommendationSupplementStatus === "loading" ||
+      !state.loaded ||
+      !state.videoId
+    ) {
+      return;
+    }
+
+    const requestId = ++state.recommendationRequestId;
+    const videoId = state.videoId;
+    const focusedT = Number(
+      state.recommendationRows[state.recommendationIndex]?.dataset.t,
+    );
+    state.recommendationSupplementStatus = "loading";
+    renderMatchbar(intent, state.recommendationRows.length, "local");
+    setIntentFeedback("正在查找没有直接提到关键词的相关观点…", "loading");
+    try {
+      const response = await runtimeMessage({
+        type: "MATCH_SUMMARY_INTENT",
+        payload: {
+          videoId,
+          intent,
+          targetLanguage: state.targetLanguage,
+        },
+      });
+      if (
+        requestId !== state.recommendationRequestId ||
+        videoId !== state.videoId ||
+        state.recommendationIntent !== intent
+      ) {
+        return;
+      }
+      if (!response?.ok) throw new Error(response?.error || "匹配失败，请重试");
+
+      const localTs = [...state.recommendationLocalMatches.keys()];
+      const localSet = new Set(localTs);
+      const aiTs = (Array.isArray(response.pointTs) ? response.pointTs : [])
+        .map((timestamp) => Math.max(0, Math.floor(Number(timestamp) || 0)))
+        .filter((timestamp) => getPointRow(timestamp));
+      const addedTs = [
+        ...new Set(aiTs.filter((timestamp) => !localSet.has(timestamp))),
+      ];
+      const mergedTs = [...new Set([...localTs, ...addedTs])].sort(
+        (a, b) => a - b,
+      );
+      state.recommendationAiAddedCount = addedTs.length;
+      state.recommendationSupplementStatus = "complete";
+      setIntentFeedback("");
+      applyRecommendation(intent, mergedTs, {
+        source: "hybrid",
+        limit: Infinity,
+        preserveFocusT: Number.isFinite(focusedT) ? focusedT : null,
+      });
+    } catch (error) {
+      if (
+        requestId !== state.recommendationRequestId ||
+        videoId !== state.videoId ||
+        state.recommendationIntent !== intent
+      ) {
+        return;
+      }
+      state.recommendationSource = "local";
+      state.recommendationAiAddedCount = 0;
+      state.recommendationSupplementStatus = "idle";
+      renderMatchbar(intent, state.recommendationRows.length, "local");
+      setIntentFeedback(error?.message || "匹配失败，请重试", "error", () =>
+        runSemanticSupplement(),
+      );
+    }
+  }
+
   function showDefaultRecommendationLoading() {
     elements.intentChips.replaceChildren();
     const placeholder = document.createElement("span");
@@ -2253,7 +2452,8 @@
     }
     elements.intentChips.classList.toggle(
       "yvpm-intent-chips-muted",
-      state.recommendationSource === "custom",
+      Boolean(state.recommendationSource) &&
+        state.recommendationSource !== "default",
     );
     setActiveIntentChip(state.recommendationIntent);
   }
@@ -2548,6 +2748,9 @@
       if (selection && !selection.isCollapsed && selection.toString().trim()) {
         return;
       }
+      if (state.recommendationAutoExpandedRow === row) {
+        state.recommendationAutoExpandedRow = null;
+      }
       const expanding = detail.hidden;
       setFollowPlayback(false);
       setRowExpanded(row, expanding);
@@ -2806,7 +3009,11 @@
   }
 
   function readingViewportTop() {
-    const stickyElements = [elements.appbar, elements.generationBar];
+    const stickyElements = [
+      elements.appbar,
+      elements.generationBar,
+      elements.matchbar,
+    ];
     return stickyElements.reduce((bottom, element) => {
       if (!element || element.hidden) return bottom;
       return Math.max(bottom, element.getBoundingClientRect().bottom);
@@ -3485,6 +3692,9 @@
   elements.matchClear.addEventListener("click", () => {
     clearRecommendation({ restoreSections: true, clearInput: true });
     setIntentFeedback("");
+  });
+  elements.matchRelated.addEventListener("click", () => {
+    void runSemanticSupplement();
   });
   elements.matchPrev.addEventListener("click", () => {
     focusRecommendation(state.recommendationIndex - 1);

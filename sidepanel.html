@@ -104,17 +104,17 @@
         <button id="yvpm-overview-retry" type="button" hidden>重试概览</button>
       </section>
       <section id="yvpm-intent" class="yvpm-intent" hidden>
-        <h2>你想从这期视频中获得什么？</h2>
+        <h2>搜索或提问</h2>
         <form id="yvpm-intent-form" class="yvpm-intent-form">
           <input
             id="yvpm-intent-input"
             type="text"
             maxlength="200"
             autocomplete="off"
-            aria-label="观看需求"
-            placeholder="例如：我是研究生，想了解他的科研成长路径"
+            aria-label="搜索关键词或描述观看需求"
+            placeholder="搜关键词，或描述你想了解什么"
           />
-          <button id="yvpm-intent-submit" type="submit">帮我找</button>
+          <button id="yvpm-intent-submit" type="submit">查找</button>
         </form>
         <div id="yvpm-intent-chips" class="yvpm-intent-chips" aria-label="推荐观看需求"></div>
         <div id="yvpm-intent-feedback" class="yvpm-intent-feedback" hidden aria-live="polite"></div>
@@ -122,9 +122,10 @@
       <div id="yvpm-matchbar" class="yvpm-matchbar" hidden aria-live="polite">
         <span id="yvpm-matchbar-text"></span>
         <div class="yvpm-matchbar-actions">
+          <button id="yvpm-match-related" class="yvpm-match-related" type="button" hidden>查找相关观点</button>
           <button id="yvpm-match-clear" class="yvpm-match-clear" type="button">清除</button>
-          <button id="yvpm-match-prev" class="yvpm-match-nav" type="button" aria-label="上一个推荐">↑</button>
-          <button id="yvpm-match-next" class="yvpm-match-nav" type="button" aria-label="下一个推荐">↓</button>
+          <button id="yvpm-match-prev" class="yvpm-match-nav" type="button" aria-label="上一个匹配">↑</button>
+          <button id="yvpm-match-next" class="yvpm-match-nav" type="button" aria-label="下一个匹配">↓</button>
         </div>
       </div>
       <div id="yvpm-list-heading" class="yvpm-list-heading" hidden>
