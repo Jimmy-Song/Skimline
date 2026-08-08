@@ -428,6 +428,32 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(source, /MAX_EXPLANATION_TURNS = 3/);
   assert.match(source, /type: "MATCH_SUMMARY_INTENT"/);
   assert.match(source, /type: "GET_DEFAULT_RECOMMENDATIONS"/);
+  assert.match(source, /YouTubeSummary\.rankPointsByQuery\(state\.points, intent\)/);
+  assert.match(source, /async function runSemanticSupplement\(\)/);
+  assert.match(source, /source: "local",[\s\S]*?limit: Infinity/);
+  assert.match(source, /source: "hybrid",[\s\S]*?preserveFocusT:/);
+  assert.match(source, /recommendationAutoExpandedRow/);
+  assert.match(source, /state\.recommendationPreviousExpanded = state\.sectionViews\.map/);
+  const recommendationBlock = source.slice(
+    source.indexOf("async function runRecommendation"),
+    source.indexOf("async function runSemanticSupplement"),
+  );
+  assert.ok(
+    recommendationBlock.indexOf("rankPointsByQuery") <
+      recommendationBlock.indexOf("runtimeMessage"),
+  );
+  const supplementBlock = source.slice(
+    source.indexOf("async function runSemanticSupplement"),
+    source.indexOf("function showDefaultRecommendationLoading"),
+  );
+  assert.doesNotMatch(
+    supplementBlock,
+    /clearRecommendation|recommendationPreviousExpanded/,
+  );
+  assert.match(supplementBlock, /\+\+state\.recommendationRequestId/);
+  assert.match(supplementBlock, /state\.recommendationIntent !== intent/);
+  assert.match(supplementBlock, /preserveFocusT:/);
+  assert.match(source, /AI 没有找到额外相关的观点/);
   assert.match(source, /applyRecommendation\(intent, question\.pointTs, \{ source: "default" \}\)/);
   assert.match(source, /applyRecommendation\(intent, response\.pointTs, \{ source: "custom" \}\)/);
   assert.match(source, /clearRecommendation\(\{ restoreSections: true, clearInput: true \}\)/);

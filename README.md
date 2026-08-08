@@ -10,8 +10,8 @@ Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中
 
 如果你只想安装扩展：
 
-1. 下载 `releases/skimline-0.4.1-extension.zip`。
-2. 解压 ZIP，并进入其中的 `skimline-0.4.1` 目录。
+1. 下载 `releases/skimline-0.4.2-extension.zip`。
+2. 解压 ZIP，并进入其中的 `skimline-0.4.2` 目录。
 3. 打开 Chrome，在地址栏输入 `chrome://extensions`。
 4. 打开右上角“开发者模式”。
 5. 点击“加载已解压的扩展程序”，选择解压后的项目目录。
@@ -29,6 +29,8 @@ Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中
 7. 刷新已经打开的 YouTube 标签页，再打开带字幕的视频。
 
 Side Panel 不会覆盖视频或 YouTube 推荐栏。确认语言后，整期概览和观点地图会从同一份字幕并行生成：概览优先返回并淡入顶部，观点块同步流式出现，即使乱序返回也会始终按时间升序排列；底部用灰色进度和 shimmer 表示后面还有内容。全部观点完成后，再显示默认折叠的自然分区、核心洞见和“值得看问题”入口。
+
+“搜索或提问”会先在当前摘要的观点和详情中做本地检索：关键词有直接命中时立即返回全部相关观点，不调用模型；首次跳到信息最集中的一条，之后按视频时间用上、下按钮浏览。关键词只出现在详情里时会自动展开当前详情。没有字面命中时才回退到 AI 意图匹配并精选最多 4 条；已有本地结果时，也可以主动“查找相关观点”，将 AI 新发现的观点去重补充到原结果中。
 
 顶部文字滑杆可在 85%–125% 之间连续调整整个 Side Panel 的文字大小，点击当前百分比可恢复 100%。选择会保存在本机，切换视频、关闭 Side Panel 或重启 Chrome 后继续生效；调整文字不会重新生成摘要。
 
@@ -55,7 +57,7 @@ npm test
 npm run build:release
 ```
 
-测试覆盖 Side Panel 声明与渲染、全局文字缩放与本地持久化、侧栏↔内容脚本消息桥、CSP 安全的 MAIN world 字幕读取、无字幕与播放器失败的区分、字幕轨道选择、json3 与官方文字记录 fallback、分块、乱序流式合并、6 秒语言确认、概览与观点并行时机、概览独立缓存和重试、失败隔离、多标签复用、最后标签页关闭取消、Service Worker 恢复、旧缓存兼容、默认值得看问题、收藏多副本合并与删除墓碑、幽灵副本防复活、v1 → v2 迁移、完整备份幂等导入、超过 1000 条不截断、圈选解释的字幕检索与真实时间戳约束、短追问、完整标题与 CSS 省略、折叠与跳转、双层播放跟随和关键视觉 token。`config.local.js` 仅供本地烟测，已被 Git 忽略，严禁提交或记录其中内容。
+测试覆盖 Side Panel 声明与渲染、全局文字缩放与本地持久化、侧栏↔内容脚本消息桥、CSP 安全的 MAIN world 字幕读取、无字幕与播放器失败的区分、字幕轨道选择、json3 与官方文字记录 fallback、分块、乱序流式合并、6 秒语言确认、概览与观点并行时机、概览独立缓存和重试、失败隔离、多标签复用、最后标签页关闭取消、Service Worker 恢复、旧缓存兼容、本地全量检索与 AI 补充、默认值得看问题、收藏多副本合并与删除墓碑、幽灵副本防复活、v1 → v2 迁移、完整备份幂等导入、超过 1000 条不截断、圈选解释的字幕检索与真实时间戳约束、短追问、完整标题与 CSS 省略、折叠与跳转、双层播放跟随和关键视觉 token。`config.local.js` 仅供本地烟测，已被 Git 忽略，严禁提交或记录其中内容。
 
 ## 隐私与范围
 
@@ -74,7 +76,7 @@ npm run build:release
 ```bash
 npm test
 npm run build:release
-unzip -t releases/skimline-0.4.1-extension.zip
+unzip -t releases/skimline-0.4.2-extension.zip
 git ls-files -z | xargs -0 rg -n "(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer [A-Za-z0-9._-]{20,})" -S
 ```
 

@@ -1145,6 +1145,20 @@ html[data-text-scale="expanded"] .yvpm-video-group-title {
   white-space: nowrap;
 }
 
+.yvpm-matchbar-local {
+  flex-wrap: wrap;
+}
+
+.yvpm-matchbar-local #yvpm-matchbar-text {
+  flex: 1 1 100%;
+  white-space: normal;
+}
+
+.yvpm-matchbar-local .yvpm-matchbar-actions {
+  width: 100%;
+  justify-content: flex-end;
+}
+
 .yvpm-matchbar-actions {
   display: flex;
   flex: none;
@@ -1153,6 +1167,7 @@ html[data-text-scale="expanded"] .yvpm-video-group-title {
 }
 
 .yvpm-match-clear,
+.yvpm-match-related,
 .yvpm-match-nav {
   border: 0;
   background: transparent;
@@ -1163,6 +1178,23 @@ html[data-text-scale="expanded"] .yvpm-video-group-title {
 
 .yvpm-match-clear {
   padding: 6px;
+}
+
+.yvpm-match-related {
+  border-radius: 6px;
+  padding: 6px;
+  white-space: nowrap;
+}
+
+.yvpm-match-related:hover,
+.yvpm-match-related:focus-visible {
+  outline: 0;
+  background: var(--expand-fill);
+}
+
+.yvpm-match-related:disabled {
+  cursor: default;
+  opacity: 0.65;
 }
 
 .yvpm-match-nav {

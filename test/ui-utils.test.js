@@ -19,6 +19,7 @@ const {
   playbackTimeOr,
   pointIdentity,
   pointStableKey,
+  rankPointsByQuery,
   reconcileLibraryExpansion,
   seekVideo,
   transitionLibrarySearchExpansion,
@@ -73,6 +74,70 @@ test("只从 YouTube watch URL 读取 videoId", () => {
 
 test("观点标识兼顾时间和内容", () => {
   assert.equal(pointIdentity({ t: 12, point: "观点" }), "12:观点");
+});
+
+test("观点检索处理空查询、大小写、全角字符且不截断结果", () => {
+  const points = Array.from({ length: 7 }, (_, index) => ({
+    t: index * 10,
+    point: index === 0 ? "CODEX 可以协作" : `观点 ${index}`,
+    detail: index > 0 ? "这里也提到 Codex。" : "",
+  }));
+  assert.deepEqual(rankPointsByQuery(points, "   "), []);
+  const matches = rankPointsByQuery(points, "Ｃｏｄｅｘ");
+  assert.equal(matches.length, 7);
+  assert.equal(matches[0].t, 0);
+  assert.equal(matches[0].score, 3);
+  assert.equal(matches[0].allTermsInPoint, true);
+  assert.equal(matches[1].allTermsInPoint, false);
+});
+
+test("观点检索使用多词 AND、去重查询词并允许词分布在两个字段", () => {
+  const points = [
+    { t: 10, point: "Claude 负责评审", detail: "Codex 负责实现。" },
+    { t: 20, point: "Claude 单独工作", detail: "没有另一个工具。" },
+  ];
+  const matches = rankPointsByQuery(points, " claude   codex codex ");
+  assert.deepEqual(matches, [
+    { t: 10, score: 4, allTermsInPoint: false },
+  ]);
+});
+
+test("观点检索按字段和出现次数计分，平分时按时间排序", () => {
+  const matches = rankPointsByQuery(
+    [
+      { t: 30, point: "普通观点", detail: "Codex Codex" },
+      { t: 20, point: "Codex 观点", detail: "" },
+      { t: 10, point: "Codex 观点", detail: "" },
+    ],
+    "codex",
+  );
+  assert.deepEqual(matches, [
+    { t: 10, score: 3, allTermsInPoint: true },
+    { t: 20, score: 3, allTermsInPoint: true },
+    { t: 30, score: 2, allTermsInPoint: false },
+  ]);
+});
+
+test("拉丁数字查询使用词边界，符号和中文查询保持字面子串", () => {
+  const points = [
+    { t: 10, point: "Claude 与 Codex 协作", detail: "" },
+    { t: 20, point: "Claude Code 是独立产品", detail: "" },
+    { t: 30, point: "codex_cli 和 C++ 都被提到", detail: "" },
+  ];
+  assert.deepEqual(
+    rankPointsByQuery(points, "Claude Code").map((match) => match.t),
+    [20],
+  );
+  assert.deepEqual(
+    rankPointsByQuery(points, "codex").map((match) => match.t),
+    [10, 30],
+  );
+  assert.deepEqual(
+    rankPointsByQuery(points, "c++").map((match) => match.t),
+    [30],
+  );
+  assert.deepEqual(rankPointsByQuery(points, "cod"), []);
+  assert.doesNotThrow(() => rankPointsByQuery(points, "("));
 });
 
 test("文字缩放值取整、限制在 85%–125% 且脏数据回落到 100%", () => {

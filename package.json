@@ -1,6 +1,6 @@
 {
   "name": "youtube-viewpoint-map",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "private": true,
   "description": "Skimline — a scannable, jump-anywhere map for long YouTube videos",
   "scripts": {
