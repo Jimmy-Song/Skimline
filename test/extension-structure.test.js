@@ -516,13 +516,33 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.doesNotMatch(source, /DeepSeek|模型品牌|已缓存/);
 });
 
+test("洞见库图标使用单路径 SVG，避免拼接描边错位", () => {
+  const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
+  const harness = fs.readFileSync(path.join(root, "test/harness.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "sidepanel.css"), "utf8");
+
+  for (const markup of [html, harness]) {
+    assert.match(markup, /<svg[^>]*class="yvpm-library-icon"[^>]*>/);
+    assert.match(
+      markup,
+      /<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" \/>/,
+    );
+  }
+  assert.match(css, /\.yvpm-library-icon\s*\{[\s\S]*?stroke-linejoin: round;/);
+  assert.match(css, /\.yvpm-library-icon path\s*\{[\s\S]*?vector-effect: non-scaling-stroke;/);
+  assert.doesNotMatch(css, /\.yvpm-library-icon::after/);
+});
+
 test("播放跟随是可见二态开关，并覆盖跨章节、推荐和 DOM 生命周期", () => {
   const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
   const source = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
   const css = fs.readFileSync(path.join(root, "sidepanel.css"), "utf8");
 
+  assert.match(source, /const DEFAULT_FOLLOW_PLAYBACK = true/);
+  assert.match(source, /followPlayback: DEFAULT_FOLLOW_PLAYBACK/);
   assert.match(html, /id="yvpm-follow-playback"/);
-  assert.match(html, /aria-pressed="false"/);
+  assert.match(html, /aria-pressed="true"/);
+  assert.match(html, /aria-label="跟随播放已开启"/);
   assert.match(css, /\.yvpm-follow-playback\[aria-pressed="true"\]/);
 
   assert.match(
@@ -560,6 +580,20 @@ test("播放跟随是可见二态开关，并覆盖跨章节、推荐和 DOM 生
   );
   assert.match(nowPlaying, /!recommendationIsActive\(\)/);
   assert.match(nowPlaying, /row\.closest\("\.yvpm-section"\)/);
+  assert.match(nowPlaying, /scroll = true/);
+  assert.match(
+    nowPlaying,
+    /if \(row && scroll\) \{[\s\S]*?row\.scrollIntoView/,
+  );
+
+  const mergePoints = source.slice(
+    source.indexOf("function mergePoints"),
+    source.indexOf("function setListHeading"),
+  );
+  assert.match(
+    mergePoints,
+    /updateNowPlaying\(\{[\s\S]*?follow: state\.followPlayback,[\s\S]*?forceFollow: state\.followPlayback,[\s\S]*?scroll: false/,
+  );
 
   const seekWithFeedback = source.slice(
     source.indexOf("async function seekWithFeedback"),
@@ -620,6 +654,14 @@ test("活动标签切换保存并恢复跟随状态，且不使同上下文生�
     source.indexOf("function finishSummaryRender"),
     source.indexOf("function applyReadingAnchor"),
   );
+  const renderSummary = source.slice(
+    source.indexOf("function renderSummary"),
+    source.indexOf("function readingViewportTop"),
+  );
+  const applyPendingPlaybackRestore = source.slice(
+    source.indexOf("function applyPendingPlaybackRestore"),
+    source.indexOf("function finalizeGeneratedSummary"),
+  );
   const removedListener = source.slice(
     source.indexOf("chrome.tabs.onRemoved.addListener"),
     source.indexOf("chrome.tabs.onUpdated.addListener"),
@@ -639,12 +681,33 @@ test("活动标签切换保存并恢复跟随状态，且不使同上下文生�
     switchToVideo,
     /YouTubeSummary\.playbackTimeOr\([\s\S]*?currentTime,[\s\S]*?state\.currentTime/,
   );
-  assert.match(switchToVideo, /setFollowPlayback\(false\)/);
+  assert.match(
+    switchToVideo,
+    /setFollowPlayback\([\s\S]*?restoreSnapshot\?\.followPlayback \?\? DEFAULT_FOLLOW_PLAYBACK/,
+  );
   assert.match(switchToVideo, /pendingPlaybackRestore = restoreSnapshot/);
   assert.match(source, /function invalidateFollowSeekRequests/);
   assert.match(source, /pending\?\.tabId === state\.tabId/);
   assert.match(finishSummaryRender, /forceFollow: state\.followPlayback/);
+  assert.match(finishSummaryRender, /scroll,/);
   assert.match(finishSummaryRender, /if \(state\.followPlayback\) return null/);
+  assert.ok(
+    renderSummary.indexOf("const hadPoints = state.points.length > 0") <
+      renderSummary.indexOf("clearPoints({ preserveOverview: true })"),
+  );
+  assert.equal(
+    renderSummary.match(/finishSummaryRender\(anchor, \{ scroll: hadPoints \}\)/g)
+      ?.length,
+    2,
+  );
+  assert.match(
+    applyPendingPlaybackRestore,
+    /state\.pendingPlaybackRestore = null;[\s\S]*?if \(state\.followPlayback\) return true/,
+  );
+  assert.doesNotMatch(
+    applyPendingPlaybackRestore,
+    /setFollowPlayback\(true, \{ sync: true \}\)/,
+  );
   assert.ok(
     removedListener.indexOf("state.playbackSnapshots.remove(tabId)") <
       removedListener.indexOf("if (tabId !== state.tabId) return"),

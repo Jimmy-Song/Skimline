@@ -2,6 +2,7 @@
   "use strict";
 
   const DEFAULT_SECTIONS_COLLAPSED = true;
+  const DEFAULT_FOLLOW_PLAYBACK = true;
   const LANGUAGE_SETTING_KEY = "summary_language";
   const TEXT_SCALE_SETTING_KEY = "content_text_scale";
   const CLIPPING_HINT_SETTING_KEY = "skimline_clipping_hint_seen_v1";
@@ -12,6 +13,8 @@
   const PREPARE_COUNTDOWN_SECONDS = 6;
   const MAX_EXPLANATION_SELECTION_CHARS = 200;
   const MAX_EXPLANATION_TURNS = 3;
+  const EXPLAIN_MENU_VIEWPORT_GAP = 8;
+  const EXPLAIN_MENU_ARROW_INSET = 12;
   const LANGUAGE_OPTIONS = {
     auto: "自动（跟随 Chrome）",
     "zh-CN": "简体中文",
@@ -64,7 +67,7 @@
     sectionGroups: [],
     sectionViews: [],
     expandedRow: null,
-    followPlayback: false,
+    followPlayback: DEFAULT_FOLLOW_PLAYBACK,
     followSeekRequestId: 0,
     playbackSnapshots: YouTubeSummary.createTabPlaybackSnapshots(),
     pendingPlaybackRestore: null,
@@ -474,15 +477,32 @@
   function positionExplainMenu(rect = explanationAnchorRect()) {
     if (!rect || elements.explainMenu.hidden) return;
     const menuRect = elements.explainMenu.getBoundingClientRect();
-    const left = Math.min(
-      window.innerWidth - menuRect.width - 8,
-      Math.max(8, rect.left + rect.width / 2 - menuRect.width / 2),
+    const anchorX = rect.left + rect.width / 2;
+    const left = Math.max(
+      EXPLAIN_MENU_VIEWPORT_GAP,
+      Math.min(
+        window.innerWidth - menuRect.width - EXPLAIN_MENU_VIEWPORT_GAP,
+        anchorX - menuRect.width / 2,
+      ),
+    );
+    const positionedLeft = Math.floor(left);
+    const arrowInset = Math.min(
+      EXPLAIN_MENU_ARROW_INSET,
+      menuRect.width / 2,
+    );
+    const arrowX = Math.max(
+      arrowInset,
+      Math.min(menuRect.width - arrowInset, anchorX - positionedLeft),
     );
     const fitsAbove = rect.top >= menuRect.height + 12;
     const top = fitsAbove
       ? rect.top - menuRect.height - 8
       : rect.bottom + 8;
-    elements.explainMenu.style.left = `${Math.round(left)}px`;
+    elements.explainMenu.style.left = `${positionedLeft}px`;
+    elements.explainMenu.style.setProperty(
+      "--yvpm-explain-menu-arrow-x",
+      `${arrowX}px`,
+    );
     elements.explainMenu.style.top = `${Math.round(
       Math.max(56, Math.min(window.innerHeight - menuRect.height - 8, top)),
     )}px`;
@@ -2830,7 +2850,11 @@
     return view;
   }
 
-  function updateNowPlaying({ follow = true, forceFollow = false } = {}) {
+  function updateNowPlaying({
+    follow = true,
+    forceFollow = false,
+    scroll = true,
+  } = {}) {
     const rows = elements.list.querySelectorAll(".yvpm-row");
     const index = YouTubeSummary.findCurrentPointIndex(
       state.points,
@@ -2874,7 +2898,7 @@
         viewIndex === sectionIndex,
       );
     });
-    if (row) {
+    if (row && scroll) {
       row.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
     state.currentIndex = index;
@@ -2933,7 +2957,11 @@
     elements.list.append(fragment);
     state.points = mergedPoints;
     setListHeading("关键观点", `${state.points.length} 条观点`);
-    updateNowPlaying({ follow: false });
+    updateNowPlaying({
+      follow: state.followPlayback,
+      forceFollow: state.followPlayback,
+      scroll: false,
+    });
   }
 
   function setListHeading(title = "", meta = "") {
@@ -2949,10 +2977,11 @@
     ) || null;
   }
 
-  function finishSummaryRender(anchor) {
+  function finishSummaryRender(anchor, { scroll = true } = {}) {
     updateNowPlaying({
       follow: state.followPlayback,
       forceFollow: state.followPlayback,
+      scroll,
     });
     if (state.followPlayback) return null;
     return applyReadingAnchor(anchor);
@@ -2972,6 +3001,7 @@
   }
 
   function renderSummary(summary, { anchor = null } = {}) {
+    const hadPoints = state.points.length > 0;
     clearPoints({ preserveOverview: true });
     const points = YouTubeSummary.dedupePointsByTimestamp(summary?.points);
     const groups = YouTubeSummary.groupPointsBySections(
@@ -2987,7 +3017,7 @@
       renderIntentControls(summary);
       if (elements.overview.hidden) showOverviewError();
       void showClippingHintOnce();
-      return finishSummaryRender(anchor);
+      return finishSummaryRender(anchor, { scroll: hadPoints });
     }
     state.sectionGroups = groups;
     state.points = groups.flatMap((group) => group.points);
@@ -3005,7 +3035,7 @@
     renderIntentControls(summary);
     if (elements.overview.hidden) showOverviewError();
     void showClippingHintOnce();
-    return finishSummaryRender(anchor);
+    return finishSummaryRender(anchor, { scroll: hadPoints });
   }
 
   function readingViewportTop() {
@@ -3062,10 +3092,7 @@
     if (!state.points.length) return false;
 
     state.pendingPlaybackRestore = null;
-    if (pending.followPlayback) {
-      setFollowPlayback(true, { sync: true });
-      return true;
-    }
+    if (state.followPlayback) return true;
     const row = applyReadingAnchor(pending.anchor);
     restoreReadingAnchor(pending.anchor, row);
     return true;
@@ -3187,7 +3214,9 @@
       showEmpty();
       return;
     }
-    setFollowPlayback(false);
+    setFollowPlayback(
+      restoreSnapshot?.followPlayback ?? DEFAULT_FOLLOW_PLAYBACK,
+    );
     hidePrepare();
     setGeneratingVisible(false);
     clearPoints();

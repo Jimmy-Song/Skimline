@@ -20,7 +20,14 @@
           aria-label="打开洞见库"
           aria-pressed="false"
         >
-          <span class="yvpm-library-icon" aria-hidden="true"></span>
+          <svg
+            class="yvpm-library-icon"
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            focusable="false"
+          >
+            <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+          </svg>
           <span id="yvpm-library-count" class="yvpm-library-count" hidden>0</span>
         </button>
         <div class="yvpm-text-scale-control" role="group" aria-label="文字大小">
@@ -136,8 +143,8 @@
             id="yvpm-follow-playback"
             class="yvpm-follow-playback"
             type="button"
-            aria-pressed="false"
-            aria-label="跟随播放已关闭"
+            aria-pressed="true"
+            aria-label="跟随播放已开启"
           >
             <span class="yvpm-follow-playback-dot" aria-hidden="true"></span>
             <span>跟随播放</span>
