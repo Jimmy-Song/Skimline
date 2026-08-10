@@ -516,6 +516,23 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.doesNotMatch(source, /DeepSeek|模型品牌|已缓存/);
 });
 
+test("洞见库图标使用单路径 SVG，避免拼接描边错位", () => {
+  const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
+  const harness = fs.readFileSync(path.join(root, "test/harness.html"), "utf8");
+  const css = fs.readFileSync(path.join(root, "sidepanel.css"), "utf8");
+
+  for (const markup of [html, harness]) {
+    assert.match(markup, /<svg[^>]*class="yvpm-library-icon"[^>]*>/);
+    assert.match(
+      markup,
+      /<path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" \/>/,
+    );
+  }
+  assert.match(css, /\.yvpm-library-icon\s*\{[\s\S]*?stroke-linejoin: round;/);
+  assert.match(css, /\.yvpm-library-icon path\s*\{[\s\S]*?vector-effect: non-scaling-stroke;/);
+  assert.doesNotMatch(css, /\.yvpm-library-icon::after/);
+});
+
 test("播放跟随是可见二态开关，并覆盖跨章节、推荐和 DOM 生命周期", () => {
   const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
   const source = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
