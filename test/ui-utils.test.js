@@ -529,6 +529,36 @@ test("D 划词操作默认中性且悬停色块从主背景与强调色派生", 
   assert.match(hoverRule, /color: var\(--accent-warm\)/);
 });
 
+test("划词操作浮层稳定按内容宽度定位，并让箭头跟随边缘选区", () => {
+  const css = fs.readFileSync(
+    path.join(__dirname, "..", "sidepanel.css"),
+    "utf8",
+  );
+  const source = fs.readFileSync(
+    path.join(__dirname, "..", "sidepanel.js"),
+    "utf8",
+  );
+  const menuRule =
+    css.match(/\.yvpm-explain-menu\s*\{[\s\S]*?\}/)?.[0] || "";
+  assert.match(menuRule, /width: max-content/);
+  assert.match(menuRule, /max-width: calc\(100vw - 16px\)/);
+  assert.match(css, /left: var\(--yvpm-explain-menu-arrow-x, 50%\)/);
+  assert.match(
+    source,
+    /const left = Math\.max\([\s\S]*?EXPLAIN_MENU_VIEWPORT_GAP,[\s\S]*?Math\.min\([\s\S]*?window\.innerWidth - menuRect\.width - EXPLAIN_MENU_VIEWPORT_GAP/,
+  );
+  assert.match(source, /const positionedLeft = Math\.floor\(left\)/);
+  assert.match(
+    source,
+    /const arrowInset = Math\.min\([\s\S]*?EXPLAIN_MENU_ARROW_INSET,[\s\S]*?menuRect\.width \/ 2/,
+  );
+  assert.match(source, /anchorX - positionedLeft/);
+  assert.match(
+    source,
+    /setProperty\(\s*"--yvpm-explain-menu-arrow-x"/,
+  );
+});
+
 test("F3 超长分区标题与观点只在 CSS 中可见省略", () => {
   const css = fs.readFileSync(path.join(__dirname, "..", "sidepanel.css"), "utf8");
   const titleRule =

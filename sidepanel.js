@@ -13,6 +13,8 @@
   const PREPARE_COUNTDOWN_SECONDS = 6;
   const MAX_EXPLANATION_SELECTION_CHARS = 200;
   const MAX_EXPLANATION_TURNS = 3;
+  const EXPLAIN_MENU_VIEWPORT_GAP = 8;
+  const EXPLAIN_MENU_ARROW_INSET = 12;
   const LANGUAGE_OPTIONS = {
     auto: "自动（跟随 Chrome）",
     "zh-CN": "简体中文",
@@ -475,15 +477,32 @@
   function positionExplainMenu(rect = explanationAnchorRect()) {
     if (!rect || elements.explainMenu.hidden) return;
     const menuRect = elements.explainMenu.getBoundingClientRect();
-    const left = Math.min(
-      window.innerWidth - menuRect.width - 8,
-      Math.max(8, rect.left + rect.width / 2 - menuRect.width / 2),
+    const anchorX = rect.left + rect.width / 2;
+    const left = Math.max(
+      EXPLAIN_MENU_VIEWPORT_GAP,
+      Math.min(
+        window.innerWidth - menuRect.width - EXPLAIN_MENU_VIEWPORT_GAP,
+        anchorX - menuRect.width / 2,
+      ),
+    );
+    const positionedLeft = Math.floor(left);
+    const arrowInset = Math.min(
+      EXPLAIN_MENU_ARROW_INSET,
+      menuRect.width / 2,
+    );
+    const arrowX = Math.max(
+      arrowInset,
+      Math.min(menuRect.width - arrowInset, anchorX - positionedLeft),
     );
     const fitsAbove = rect.top >= menuRect.height + 12;
     const top = fitsAbove
       ? rect.top - menuRect.height - 8
       : rect.bottom + 8;
-    elements.explainMenu.style.left = `${Math.round(left)}px`;
+    elements.explainMenu.style.left = `${positionedLeft}px`;
+    elements.explainMenu.style.setProperty(
+      "--yvpm-explain-menu-arrow-x",
+      `${arrowX}px`,
+    );
     elements.explainMenu.style.top = `${Math.round(
       Math.max(56, Math.min(window.innerHeight - menuRect.height - 8, top)),
     )}px`;

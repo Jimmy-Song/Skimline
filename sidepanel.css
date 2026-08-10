@@ -1534,6 +1534,8 @@ html .yvpm-expanded .yvpm-point-toggle .yvpm-claim {
   position: fixed;
   z-index: 30;
   display: flex;
+  width: max-content;
+  max-width: calc(100vw - 16px);
   align-items: center;
   gap: 3px;
   border: 0.5px solid var(--adaptive-border);
@@ -1552,7 +1554,7 @@ html .yvpm-expanded .yvpm-point-toggle .yvpm-claim {
 .yvpm-explain-menu::after {
   position: absolute;
   bottom: -4px;
-  left: 50%;
+  left: var(--yvpm-explain-menu-arrow-x, 50%);
   width: 8px;
   height: 8px;
   border-right: 0.5px solid var(--adaptive-border);
