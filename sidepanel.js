@@ -2,6 +2,7 @@
   "use strict";
 
   const DEFAULT_SECTIONS_COLLAPSED = true;
+  const DEFAULT_FOLLOW_PLAYBACK = true;
   const LANGUAGE_SETTING_KEY = "summary_language";
   const TEXT_SCALE_SETTING_KEY = "content_text_scale";
   const CLIPPING_HINT_SETTING_KEY = "skimline_clipping_hint_seen_v1";
@@ -64,7 +65,7 @@
     sectionGroups: [],
     sectionViews: [],
     expandedRow: null,
-    followPlayback: false,
+    followPlayback: DEFAULT_FOLLOW_PLAYBACK,
     followSeekRequestId: 0,
     playbackSnapshots: YouTubeSummary.createTabPlaybackSnapshots(),
     pendingPlaybackRestore: null,
@@ -2830,7 +2831,11 @@
     return view;
   }
 
-  function updateNowPlaying({ follow = true, forceFollow = false } = {}) {
+  function updateNowPlaying({
+    follow = true,
+    forceFollow = false,
+    scroll = true,
+  } = {}) {
     const rows = elements.list.querySelectorAll(".yvpm-row");
     const index = YouTubeSummary.findCurrentPointIndex(
       state.points,
@@ -2874,7 +2879,7 @@
         viewIndex === sectionIndex,
       );
     });
-    if (row) {
+    if (row && scroll) {
       row.scrollIntoView({ block: "nearest", behavior: "smooth" });
     }
     state.currentIndex = index;
@@ -2933,7 +2938,11 @@
     elements.list.append(fragment);
     state.points = mergedPoints;
     setListHeading("关键观点", `${state.points.length} 条观点`);
-    updateNowPlaying({ follow: false });
+    updateNowPlaying({
+      follow: state.followPlayback,
+      forceFollow: state.followPlayback,
+      scroll: false,
+    });
   }
 
   function setListHeading(title = "", meta = "") {
@@ -2949,10 +2958,11 @@
     ) || null;
   }
 
-  function finishSummaryRender(anchor) {
+  function finishSummaryRender(anchor, { scroll = true } = {}) {
     updateNowPlaying({
       follow: state.followPlayback,
       forceFollow: state.followPlayback,
+      scroll,
     });
     if (state.followPlayback) return null;
     return applyReadingAnchor(anchor);
@@ -2972,6 +2982,7 @@
   }
 
   function renderSummary(summary, { anchor = null } = {}) {
+    const hadPoints = state.points.length > 0;
     clearPoints({ preserveOverview: true });
     const points = YouTubeSummary.dedupePointsByTimestamp(summary?.points);
     const groups = YouTubeSummary.groupPointsBySections(
@@ -2987,7 +2998,7 @@
       renderIntentControls(summary);
       if (elements.overview.hidden) showOverviewError();
       void showClippingHintOnce();
-      return finishSummaryRender(anchor);
+      return finishSummaryRender(anchor, { scroll: hadPoints });
     }
     state.sectionGroups = groups;
     state.points = groups.flatMap((group) => group.points);
@@ -3005,7 +3016,7 @@
     renderIntentControls(summary);
     if (elements.overview.hidden) showOverviewError();
     void showClippingHintOnce();
-    return finishSummaryRender(anchor);
+    return finishSummaryRender(anchor, { scroll: hadPoints });
   }
 
   function readingViewportTop() {
@@ -3062,10 +3073,7 @@
     if (!state.points.length) return false;
 
     state.pendingPlaybackRestore = null;
-    if (pending.followPlayback) {
-      setFollowPlayback(true, { sync: true });
-      return true;
-    }
+    if (state.followPlayback) return true;
     const row = applyReadingAnchor(pending.anchor);
     restoreReadingAnchor(pending.anchor, row);
     return true;
@@ -3187,7 +3195,9 @@
       showEmpty();
       return;
     }
-    setFollowPlayback(false);
+    setFollowPlayback(
+      restoreSnapshot?.followPlayback ?? DEFAULT_FOLLOW_PLAYBACK,
+    );
     hidePrepare();
     setGeneratingVisible(false);
     clearPoints();
