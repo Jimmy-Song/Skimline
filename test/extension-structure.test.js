@@ -619,6 +619,11 @@ test("播放跟随是可见二态开关，并覆盖跨章节、推荐和 DOM 生
     mergePoints,
     /updateNowPlaying\(\{[\s\S]*?follow: state\.followPlayback,[\s\S]*?forceFollow: state\.followPlayback,[\s\S]*?scroll: false/,
   );
+  assert.match(
+    mergePoints,
+    /YouTubeSummary\.reconcileRowOrder\(elements\.list, orderedRows\)/,
+  );
+  assert.doesNotMatch(mergePoints, /createDocumentFragment|fragment\.append/);
 
   const seekWithFeedback = source.slice(
     source.indexOf("async function seekWithFeedback"),

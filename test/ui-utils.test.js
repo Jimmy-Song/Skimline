@@ -21,6 +21,7 @@ const {
   pointStableKey,
   rankPointsByQuery,
   reconcileLibraryExpansion,
+  reconcileRowOrder,
   seekVideo,
   transitionLibrarySearchExpansion,
 } = require("../ui-utils.js");
@@ -254,6 +255,62 @@ test("F1 乱序块合并后始终按时间单调递增并使用稳定 key", () =
     points.every((point, index) => index === 0 || points[index - 1].t <= point.t),
   );
   assert.equal(pointStableKey("video-1", points[0]), "video-1:146");
+});
+
+test("乱序行只插入新节点，已就位节点不搬动且重复 reconciliation 幂等", () => {
+  const children = [];
+  const insertionCounts = new Map();
+  const container = {
+    get firstChild() {
+      return children[0] || null;
+    },
+    insertBefore(row, cursor) {
+      insertionCounts.set(row, (insertionCounts.get(row) || 0) + 1);
+      const currentIndex = children.indexOf(row);
+      if (currentIndex >= 0) children.splice(currentIndex, 1);
+      const targetIndex =
+        cursor === null ? children.length : children.indexOf(cursor);
+      assert.notEqual(targetIndex, -1, "cursor 必须仍是容器的子节点");
+      children.splice(targetIndex, 0, row);
+    },
+  };
+  const createRow = (id) => ({
+    id,
+    get nextSibling() {
+      const index = children.indexOf(this);
+      return index >= 0 ? children[index + 1] || null : null;
+    },
+  });
+  const rows = ["p0", "p1", "p2", "p3", "p4", "p5"].map(createRow);
+  children.push(rows[2], rows[4]);
+
+  reconcileRowOrder(container, rows);
+
+  assert.deepEqual(
+    children.map((row) => row.id),
+    ["p0", "p1", "p2", "p3", "p4", "p5"],
+  );
+  assert.equal(insertionCounts.get(rows[2]) || 0, 0);
+  assert.equal(insertionCounts.get(rows[4]) || 0, 0);
+  assert.equal(
+    [...insertionCounts.values()].reduce((total, count) => total + count, 0),
+    4,
+  );
+
+  const insertionsAfterFirstPass = [...insertionCounts.values()].reduce(
+    (total, count) => total + count,
+    0,
+  );
+  reconcileRowOrder(container, rows);
+
+  assert.deepEqual(
+    children.map((row) => row.id),
+    ["p0", "p1", "p2", "p3", "p4", "p5"],
+  );
+  assert.equal(
+    [...insertionCounts.values()].reduce((total, count) => total + count, 0),
+    insertionsAfterFirstPass,
+  );
 });
 
 test("完成重建前优先选择视口内展开行，否则选择最靠上的可见行", () => {

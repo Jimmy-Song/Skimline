@@ -3471,7 +3471,7 @@
       state.points,
       points,
     );
-    const fragment = document.createDocumentFragment();
+    const orderedRows = [];
     for (const point of mergedPoints) {
       const key = YouTubeSummary.pointStableKey(state.videoId, point);
       let row = state.pointRows.get(key);
@@ -3481,9 +3481,9 @@
       } else {
         updatePointRow(row, point, insightMap.get(point.t) || null);
       }
-      fragment.append(row);
+      orderedRows.push(row);
     }
-    elements.list.append(fragment);
+    YouTubeSummary.reconcileRowOrder(elements.list, orderedRows);
     state.points = mergedPoints;
     setListHeading("关键观点", `${state.points.length} 条观点`);
     updateNowPlaying({
