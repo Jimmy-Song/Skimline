@@ -4,8 +4,39 @@ const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
 const test = require("node:test");
+const vm = require("node:vm");
 
 const root = path.join(__dirname, "..");
+
+function externalScriptSources(html) {
+  return [...html.matchAll(/<script\s+src="([^"]+)"\s*><\/script>/g)].map(
+    (match) => match[1],
+  );
+}
+
+function assertSidePanelScriptOrder(html, label) {
+  const sources = externalScriptSources(html);
+  const generationIndex = sources.findIndex((source) =>
+    source.endsWith("generation-utils.js"),
+  );
+  const collectionsIndex = sources.findIndex((source) =>
+    source.endsWith("collection-utils.js"),
+  );
+  const uiIndex = sources.findIndex((source) =>
+    source.endsWith("ui-utils.js"),
+  );
+  const sidePanelIndex = sources.findIndex((source) =>
+    source.endsWith("sidepanel.js"),
+  );
+
+  assert.notEqual(generationIndex, -1, `${label} 缺少 generation-utils.js`);
+  assert.notEqual(collectionsIndex, -1, `${label} 缺少 collection-utils.js`);
+  assert.notEqual(uiIndex, -1, `${label} 缺少 ui-utils.js`);
+  assert.notEqual(sidePanelIndex, -1, `${label} 缺少 sidepanel.js`);
+  assert.ok(generationIndex < collectionsIndex, `${label} 摘要工具必须先加载`);
+  assert.ok(collectionsIndex < uiIndex, `${label} 收藏工具必须先于 UI 工具加载`);
+  assert.ok(uiIndex < sidePanelIndex, `${label} UI 工具必须先于 Side Panel 加载`);
+}
 
 function readPngDimensions(file) {
   const image = fs.readFileSync(file);
@@ -101,6 +132,119 @@ test("D 流式 harness 可复现乱序块、结构阶段与长标题", () => {
   assert.match(harness, /callback\(\{ ok: true, summary: streamingSummary \}\)/);
 });
 
+test("Side Panel 与浏览器 harness 按相同顺序加载共享工具", () => {
+  const sidePanelHtml = fs.readFileSync(
+    path.join(root, "sidepanel.html"),
+    "utf8",
+  );
+  const harnessHtml = fs.readFileSync(
+    path.join(root, "test", "harness.html"),
+    "utf8",
+  );
+
+  assertSidePanelScriptOrder(sidePanelHtml, "sidepanel.html");
+  assertSidePanelScriptOrder(harnessHtml, "test/harness.html");
+
+  const sidePanelIds = [
+    ...sidePanelHtml.matchAll(/\bid="([^"]+)"/g),
+  ].map((match) => match[1]).sort();
+  const harnessIds = [
+    ...harnessHtml.matchAll(/\bid="([^"]+)"/g),
+  ].map((match) => match[1]).sort();
+  assert.deepEqual(
+    harnessIds,
+    sidePanelIds,
+    "浏览器 harness 必须提供 Side Panel 初始化所需的完整 DOM",
+  );
+
+  const answerSection = (markup) =>
+    markup
+      .match(/<section id="yvpm-answer"[\s\S]*?<\/section>/)?.[0]
+      .replace(/\s+/g, " ")
+      .trim();
+  assert.equal(
+    answerSection(harnessHtml),
+    answerSection(sidePanelHtml),
+    "浏览器 harness 必须复用生产答卷的完整标记和 CSS 类",
+  );
+});
+
+test("Side Panel 使用的全部 YouTubeSummary API 在启动前完成装配", () => {
+  const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
+  const source = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
+  const unsupportedSummaryAccess = source.replace(
+    /YouTubeSummary\.[A-Za-z_$][\w$]*/g,
+    "",
+  );
+  assert.doesNotMatch(
+    unsupportedSummaryAccess,
+    /\bYouTubeSummary\b/,
+    "Side Panel 只能用可被契约测试枚举的 YouTubeSummary.method 形式",
+  );
+  const requiredMethods = [
+    ...new Set(
+      [...source.matchAll(/YouTubeSummary\.([A-Za-z_$][\w$]*)/g)].map(
+        (match) => match[1],
+      ),
+    ),
+  ].sort();
+  const scripts = externalScriptSources(html);
+  const sidePanelIndex = scripts.findIndex((script) =>
+    script.endsWith("sidepanel.js"),
+  );
+  const sandbox = vm.createContext({});
+  let generationMethods = null;
+
+  assert.notEqual(sidePanelIndex, -1, "sidepanel.html 缺少 sidepanel.js");
+  for (const script of scripts.slice(0, sidePanelIndex)) {
+    const file = path.resolve(root, script);
+    vm.runInContext(fs.readFileSync(file, "utf8"), sandbox, {
+      filename: file,
+    });
+    if (script.endsWith("generation-utils.js")) {
+      generationMethods = {
+        classifyIntent: sandbox.YouTubeSummary.classifyIntent,
+        dedupePointsByTimestamp:
+          sandbox.YouTubeSummary.dedupePointsByTimestamp,
+        formatTimestamp: sandbox.YouTubeSummary.formatTimestamp,
+        libraryTitleFromSummary:
+          sandbox.YouTubeSummary.libraryTitleFromSummary,
+        normalizeAnswerQuestion:
+          sandbox.YouTubeSummary.normalizeAnswerQuestion,
+      };
+    }
+  }
+
+  assert.ok(generationMethods, "未执行 generation-utils.js");
+  assert.ok(requiredMethods.length > 0, "未发现 YouTubeSummary API 引用");
+  for (const method of requiredMethods) {
+    assert.equal(
+      typeof sandbox.YouTubeSummary?.[method],
+      "function",
+      `Side Panel 启动时缺少 YouTubeSummary.${method}`,
+    );
+  }
+
+  for (const method of [
+    "classifyIntent",
+    "libraryTitleFromSummary",
+    "normalizeAnswerQuestion",
+  ]) {
+    assert.equal(
+      sandbox.YouTubeSummary[method],
+      generationMethods[method],
+      `${method} 应由 generation-utils.js 提供`,
+    );
+  }
+  for (const method of ["dedupePointsByTimestamp", "formatTimestamp"]) {
+    assert.notEqual(
+      sandbox.YouTubeSummary[method],
+      generationMethods[method],
+      `${method} 应由后加载的 ui-utils.js 提供`,
+    );
+  }
+});
+
 test("设置页只保存本地 API Key", () => {
   const html = fs.readFileSync(path.join(root, "options.html"), "utf8");
   const js = fs.readFileSync(path.join(root, "options.js"), "utf8");
@@ -108,6 +252,26 @@ test("设置页只保存本地 API Key", () => {
   assert.match(js, /chrome\.storage\.local\.set/);
   assert.match(js, /deepseek_api_key/);
   assert.doesNotMatch(js, /fetch\s*\(/);
+});
+
+test("本地存储只向受信任扩展上下文开放", () => {
+  const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(root, "manifest.json"), "utf8"),
+  );
+  assert.match(background, /async function restrictLocalStorageAccess/);
+  assert.match(background, /chrome\.storage\?\.local\?\.setAccessLevel\?\./);
+  assert.match(background, /accessLevel: "TRUSTED_CONTEXTS"/);
+  assert.match(background, /catch \{[\s\S]*?void restrictLocalStorageAccess\(\)/);
+
+  const contentScriptFiles = manifest.content_scripts.flatMap(
+    (definition) => definition.js || [],
+  );
+  assert.ok(contentScriptFiles.length > 0);
+  for (const file of contentScriptFiles) {
+    const source = fs.readFileSync(path.join(root, file), "utf8");
+    assert.doesNotMatch(source, /chrome\.storage/, `${file} 不应直接访问扩展存储`);
+  }
 });
 
 test("收藏 schema v2 只在最终 DOM 渲染限制数量", () => {

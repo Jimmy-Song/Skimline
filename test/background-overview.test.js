@@ -50,9 +50,18 @@ function createStorage(initial = {}) {
   };
 }
 
-function createHarness({ summary, initialStorage = {} } = {}) {
+function createHarness({
+  summary,
+  initialStorage = {},
+  storageAccessError = null,
+} = {}) {
   const storage = createStorage({ deepseek_api_key: "test-key", ...initialStorage });
   const broadcasts = [];
+  const storageAccessCalls = [];
+  storage.setAccessLevel = async (options) => {
+    storageAccessCalls.push(options);
+    if (storageAccessError) throw storageAccessError;
+  };
   let messageListener;
   let removedListener;
   const chrome = {
@@ -127,6 +136,7 @@ function createHarness({ summary, initialStorage = {} } = {}) {
     },
     invoke,
     storage,
+    storageAccessCalls,
   };
 }
 
@@ -170,6 +180,23 @@ function generationPayload(overrides = {}) {
     ...overrides,
   };
 }
+
+test("后台把本地存储限制为受信任上下文，失败时仍可读取用户数据", async () => {
+  const harness = createHarness({
+    summary: baseSummary(),
+    storageAccessError: new Error("access level unavailable"),
+  });
+  await waitFor(() => harness.storageAccessCalls.length === 1);
+  assert.equal(harness.storageAccessCalls.length, 1);
+  assert.equal(
+    harness.storageAccessCalls[0].accessLevel,
+    "TRUSTED_CONTEXTS",
+  );
+
+  const keyStatus = await harness.invoke({ type: "GET_API_KEY_STATUS" });
+  assert.equal(keyStatus.ok, true);
+  assert.equal(keyStatus.configured, true);
+});
 
 test("后台同时启动概览和观点，概览可先完成展示", async () => {
   const overview = deferred();

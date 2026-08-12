@@ -32,6 +32,23 @@ let explanationTasksRestorePromise = null;
 let answerTasksRestorePromise = null;
 let clippingMutationQueue = Promise.resolve();
 
+// API keys, saved clippings, and cached summaries are only consumed by
+// extension-owned pages and this service worker. Keep the local storage area
+// unavailable to content scripts even if a future manifest change exposes
+// additional extension APIs to them.
+async function restrictLocalStorageAccess() {
+  try {
+    await chrome.storage?.local?.setAccessLevel?.({
+      accessLevel: "TRUSTED_CONTEXTS",
+    });
+  } catch {
+    // Older or test runtimes may not expose access-level controls. Storage
+    // reads remain functional and no user data should be deleted on failure.
+  }
+}
+
+void restrictLocalStorageAccess();
+
 chrome.sidePanel
   .setPanelBehavior({ openPanelOnActionClick: true })
   .catch(() => {});
