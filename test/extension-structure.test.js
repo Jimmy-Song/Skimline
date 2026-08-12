@@ -151,6 +151,8 @@ test("内容脚本保留字幕兜底并作为视频消息桥", () => {
   assert.match(source, /captionRequests: new Map\(\)/);
   assert.match(source, /videoTitle/);
   assert.match(source, /document\.title/);
+  assert.match(source, /function cleanVideoTitle/);
+  assert.match(source, /function cleanVideoTitle[\s\S]*?replace\([\s\S]*?\\d\+/);
   assert.doesNotMatch(source, /createElement\(["']script["']\)/);
   assert.doesNotMatch(source, /runtime\.getURL\(["']injected\.js["']\)/);
   assert.doesNotMatch(source, /window\.postMessage/);
@@ -208,6 +210,9 @@ test("工具栏动作打开 Side Panel，不再切换页面浮层", () => {
   assert.match(background, /importScripts\("generation-utils\.js", "collection-utils\.js"\)/);
   assert.match(background, /message\?\.type === "LIST_CLIPPINGS"/);
   assert.match(background, /message\?\.type === "SAVE_CLIPPING"/);
+  assert.match(background, /message\?\.type === "ENSURE_LIBRARY_TITLE"/);
+  assert.match(background, /libraryTitleJobs/);
+  assert.match(background, /clipping\.targetLanguage/);
   assert.match(background, /message\?\.type === "DELETE_CLIPPING"/);
   assert.match(background, /message\?\.type === "RESTORE_CLIPPING"/);
   assert.match(background, /clippingMutationQueue/);
@@ -238,6 +243,7 @@ test("F3 模型输出标题与观点不做硬字符截断", () => {
 test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新", () => {
   const html = fs.readFileSync(path.join(root, "sidepanel.html"), "utf8");
   const source = fs.readFileSync(path.join(root, "sidepanel.js"), "utf8");
+  const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
   assert.match(html, /id="yvpm-save-selection"/);
   assert.match(html, /id="yvpm-library-button"/);
   assert.match(html, /id="yvpm-library"/);
@@ -261,6 +267,9 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(html, /id="yvpm-empty"/);
   assert.match(html, /id="yvpm-overview"/);
   assert.match(html, /id="yvpm-intent-form"/);
+  assert.match(html, /id="yvpm-answer"/);
+  assert.match(html, /id="yvpm-answer-followup-form"/);
+  assert.match(html, /id="yvpm-answer-save"/);
   assert.match(html, /id="yvpm-matchbar"/);
   assert.match(html, /id="yvpm-list-heading"/);
   assert.match(html, /id="yvpm-list-heading-title"/);
@@ -291,7 +300,10 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
     source,
     /async function seekWithFeedback\(t, \{ followPlayback = false \} = \{\}\)[\s\S]*?catch \(error\)[\s\S]*?showToast\(error\?\.message \|\| "视频跳转失败"\)/,
   );
-  assert.equal(source.match(/seekWithFeedback\(/g)?.length, 4);
+  assert.equal(source.match(/seekWithFeedback\(/g)?.length, 5);
+  assert.match(source, /YouTubeSummary\.classifyIntent/);
+  assert.match(source, /type: "START_ANSWER"/);
+  assert.match(source, /type: "CONTINUE_ANSWER_WITH_CAPTIONS"/);
   assert.match(source, /message\?\.type === "PLAYBACK_TIME"/);
   assert.match(source, /message\?\.type === "VIDEO_CHANGED"/);
   assert.match(
@@ -381,6 +393,8 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   );
   assert.match(renderLibraryBlock, /getLibraryGroups\(\)/);
   assert.match(source, /function getLibraryGroups[\s\S]*?groupClippingsByVideo/);
+  assert.match(source, /videoTitles: state\.videoTitles/);
+  assert.match(source, /targetLanguage: state\.targetLanguage/);
   assert.doesNotMatch(
     renderLibraryBlock,
     /libraryExpandedVideoIds\.(?:add|delete|clear)|initializeLibraryExpansion|applyLibrarySearchTransition|reconcileLibraryExpansionState/,
@@ -397,6 +411,17 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
     createVideoGroupBlock,
     /if \(nextExpanded\) populateVideoGroupBody\(body, group\)/,
   );
+  assert.match(createVideoGroupBlock, /yvpm-video-group-origin/);
+  assert.match(createVideoGroupBlock, /origin\.setAttribute\("aria-hidden", "true"\)/);
+  assert.match(createVideoGroupBlock, /toggle\.setAttribute\("aria-label"/);
+  assert.match(createVideoGroupBlock, /\.normalize\("NFKC"\)\.toLocaleLowerCase\(\)/);
+  assert.match(source, /state\.finalizedGenerationId = finalizationKey;[\s\S]*?ensureLibraryTitleForSummary/);
+  assert.match(source, /type: "ENSURE_LIBRARY_TITLE"/);
+  assert.match(
+    background,
+    /ENSURE_LIBRARY_TITLE/,
+  );
+  assert.match(source, /function cleanVideoTitle[\s\S]*?\[\\\(（\]\\d\+\[\\\)）\]/);
   assert.match(source, /loadClippings\(\{ render: false \}\)/);
   assert.match(source, /state\.libraryRequestId !== loadRequestId/);
   const saveSelectionBlock = source.slice(
@@ -594,6 +619,11 @@ test("播放跟随是可见二态开关，并覆盖跨章节、推荐和 DOM 生
     mergePoints,
     /updateNowPlaying\(\{[\s\S]*?follow: state\.followPlayback,[\s\S]*?forceFollow: state\.followPlayback,[\s\S]*?scroll: false/,
   );
+  assert.match(
+    mergePoints,
+    /YouTubeSummary\.reconcileRowOrder\(elements\.list, orderedRows\)/,
+  );
+  assert.doesNotMatch(mergePoints, /createDocumentFragment|fragment\.append/);
 
   const seekWithFeedback = source.slice(
     source.indexOf("async function seekWithFeedback"),

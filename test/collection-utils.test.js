@@ -25,8 +25,19 @@ function clipping(overrides = {}) {
   });
 }
 
-function state(adds = [], removes = [], revision = 0) {
-  return { schemaVersion: 2, revision, adds, removes };
+function state(adds = [], removes = [], revision = 0, videoTitles = []) {
+  return { schemaVersion: 2, revision, adds, removes, videoTitles };
+}
+
+function videoTitle(overrides = {}) {
+  return {
+    videoId: "abcdefghijk",
+    targetLanguage: "zh-CN",
+    title: "用设计系统统一 AI 网页",
+    promptVersion: 1,
+    generatedAt: 1000,
+    ...overrides,
+  };
 }
 
 test("收藏文本压缩连续空白并保留内容", () => {
@@ -56,6 +67,22 @@ test("非法来源被拒绝，标题和来源字段安全归一化", () => {
   assert.equal(item.videoTitle, "YouTube 视频 abcdefghijk");
   assert.equal(item.anchorT, 0);
   assert.equal(item.sourceType, "claim");
+});
+
+test("旧收藏标题会清理浏览器计数前缀", () => {
+  const [item] = Collections.normalizeReplicaState({
+    adds: [
+      {
+        id: "legacy-title",
+        selectedText: "这是一条足够长的收藏文本",
+        videoId: "video001",
+        videoTitle: "（12） 旧视频标题",
+        sourceType: "claim",
+        savedAt: 1,
+      },
+    ],
+  }).adds;
+  assert.equal(item.videoTitle, "旧视频标题");
 });
 
 test("schema v2 归一化按 ID 保留活跃 adds，并让 removes 单调去重", () => {
@@ -203,6 +230,59 @@ test("合并满足幂等、交换和结合，且同 ID 脏冲突结果确定", (
   );
 });
 
+test("视频标题表按版本、生成时间和 JSON 全序确定合并", () => {
+  const base = videoTitle({ title: "旧标题", generatedAt: 1000 });
+  const newer = videoTitle({ title: "新标题", generatedAt: 2000 });
+  const higherVersion = videoTitle({
+    title: "新版本标题",
+    promptVersion: 2,
+    generatedAt: 500,
+  });
+  const lexicalWinner = videoTitle({
+    title: "字典序胜出",
+    promptVersion: 2,
+    generatedAt: 500,
+  });
+  const states = [
+    state([], [], 0, [base]),
+    state([], [], 0, [newer]),
+    state([], [], 0, [higherVersion]),
+    state([], [], 0, [lexicalWinner]),
+  ];
+  const forward = Collections.mergeClippingStates(states);
+  const reverse = Collections.mergeClippingStates([...states].reverse());
+  const nested = Collections.mergeClippingStates([
+    Collections.mergeClippingStates(states.slice(0, 2)),
+    Collections.mergeClippingStates(states.slice(2)),
+  ]);
+  assert.deepEqual(forward.videoTitles, reverse.videoTitles);
+  assert.deepEqual(forward.videoTitles, nested.videoTitles);
+  assert.equal(forward.videoTitles.length, 1);
+  assert.equal(forward.videoTitles[0].promptVersion, 2);
+  assert.equal(
+    forward.videoTitles[0].title,
+    JSON.stringify(higherVersion) >= JSON.stringify(lexicalWinner)
+      ? higherVersion.title
+      : lexicalWinner.title,
+  );
+  assert.deepEqual(
+    Collections.mergeClippingStates([forward, forward]).videoTitles,
+    forward.videoTitles,
+  );
+});
+
+test("标题表为 grow-only，删光收藏后不回收孤儿条目", () => {
+  const item = clipping({ id: "with-title" });
+  const titled = Collections.upsertVideoTitle(
+    state([item]),
+    videoTitle(),
+  );
+  assert.equal(titled.changed, true);
+  const removed = Collections.removeClipping(titled.store, item.id);
+  assert.equal(Collections.listClippings([removed.store]).length, 0);
+  assert.deepEqual(removed.store.videoTitles, [videoTitle()]);
+});
+
 test("搜索覆盖全部数据而不受 1000 条渲染上限影响", () => {
   const items = Array.from({ length: 1100 }, (_, index) =>
     clipping({
@@ -230,20 +310,30 @@ test("完整备份包含墓碑，重复导入幂等且不会复活已删除内�
   const source = Collections.normalizeReplicaState({
     ...removed.store,
     adds: [...removed.store.adds, active],
+    videoTitles: [videoTitle()],
   });
   const backup = Collections.createClippingsBackup(source, { now: 3000 });
   assert.deepEqual(backup.removes, ["deleted"]);
   assert.equal(backup.adds.some((item) => item.id === "deleted"), false);
   assert.equal(backup.revision, undefined);
+  assert.deepEqual(backup.videoTitles, [videoTitle()]);
 
   const firstImport = Collections.importClippingsBackup(state(), backup);
   assert.equal(firstImport.changed, true);
   assert.deepEqual(Collections.listClippings([firstImport.store]).map((item) => item.id), [
     "active",
   ]);
+  assert.deepEqual(firstImport.store.videoTitles, [videoTitle()]);
   const secondImport = Collections.importClippingsBackup(firstImport.store, backup);
   assert.equal(secondImport.changed, false);
   assert.equal(secondImport.store.revision, firstImport.store.revision);
+
+  const legacyShape = { ...backup };
+  delete legacyShape.videoTitles;
+  assert.deepEqual(
+    Collections.normalizeClippingsBackup(legacyShape).videoTitles,
+    [],
+  );
   assert.deepEqual(secondImport.store.removes, ["deleted"]);
 });
 
@@ -270,6 +360,21 @@ test("无效备份被拒绝，落盘与导出只包含 JSON 数组", () => {
       Collections.normalizeClippingsBackup({
         ...backup,
         removes: ["removed", "removed"],
+      }),
+    /损坏或重复/,
+  );
+  assert.throws(
+    () => Collections.normalizeClippingsBackup({ ...backup, videoTitles: {} }),
+    /有效的 Skimline 收藏备份/,
+  );
+  assert.throws(
+    () =>
+      Collections.normalizeClippingsBackup({
+        ...backup,
+        videoTitles: [
+          videoTitle({ targetLanguage: "en-US" }),
+          videoTitle({ targetLanguage: "en-us" }),
+        ],
       }),
     /损坏或重复/,
   );
@@ -360,6 +465,38 @@ test("搜索任一历史视频标题时返回该视频的全部收藏", () => {
   ]);
 });
 
+test("分组展示当前语言标题，搜索同时匹配全部历史语言", () => {
+  const items = [
+    clipping({ id: "localized-a", savedAt: 2000, selectedText: "第一条收藏" }),
+    clipping({ id: "localized-b", savedAt: 1000, selectedText: "第二条收藏" }),
+  ];
+  const videoTitles = [
+    videoTitle({ targetLanguage: "zh-CN", title: "评估如何成为 AI 产品核心技能" }),
+    videoTitle({ targetLanguage: "ja", title: "AI製品評価の核心スキル" }),
+  ];
+  const chinese = Collections.groupClippingsByVideo(items, "", {
+    videoTitles,
+    targetLanguage: "zh-CN",
+  });
+  assert.equal(chinese[0].libraryTitle, "评估如何成为 AI 产品核心技能");
+
+  const japaneseSearch = Collections.groupClippingsByVideo(
+    items,
+    "核心スキル",
+    { videoTitles, targetLanguage: "zh-CN" },
+  );
+  assert.equal(japaneseSearch.length, 1);
+  assert.equal(japaneseSearch[0].libraryTitle, "评估如何成为 AI 产品核心技能");
+  assert.equal(japaneseSearch[0].titleMatched, true);
+  assert.equal(japaneseSearch[0].visibleCount, 2);
+
+  const missingLanguage = Collections.groupClippingsByVideo(items, "", {
+    videoTitles,
+    targetLanguage: "es",
+  });
+  assert.equal(missingLanguage[0].libraryTitle, "");
+});
+
 test("搜索收藏内容时保留视频父级并只返回命中的子项", () => {
   const items = [
     clipping({
@@ -400,4 +537,101 @@ test("视频分组不会修改调用方传入的收藏数组", () => {
   const snapshot = items.map((item) => ({ ...item }));
   Collections.groupClippingsByVideo(items, "收藏");
   assert.deepEqual(items, snapshot);
+});
+
+test("答卷记录保留完整快照并带旧版可识别的 selectedText 外壳", () => {
+  const answer = Collections.createAnswerClipping(
+    {
+      kind: "answer",
+      videoId: "abcdefghijk",
+      videoTitle: "示例视频",
+      targetLanguage: "zh-CN",
+      question: "为什么要避免循环工程？",
+      directAnswer: "因为它会让评测失去独立性。",
+      evidenceTs: [12],
+      steps: [{ text: "先固定评测集", sourceTs: [12] }],
+      uncertain: true,
+      notice: "摘要信息有限",
+      usedCaptions: false,
+    },
+    { id: "answer-1", now: 1000 },
+  );
+  assert.equal(answer.kind, "answer");
+  assert.match(answer.selectedText, /^答卷：/);
+  assert.ok([...answer.selectedText].length <= 200);
+  assert.deepEqual(answer.evidenceTs, [12]);
+  assert.equal(answer.anchorT, 12);
+  const normalized = Collections.normalizeReplicaState({ adds: [answer] });
+  assert.equal(normalized.adds.length, 1);
+  assert.equal(normalized.adds[0].kind, "answer");
+  assert.doesNotThrow(() =>
+    Collections.normalizeClippingsBackup({
+      format: Collections.CLIPPINGS_BACKUP_FORMAT,
+      schemaVersion: 2,
+      exportedAt: 1000,
+      adds: [answer],
+      removes: [],
+    }),
+  );
+});
+
+test("同一问题更新答卷会墓碑旧快照且不影响普通圈选", () => {
+  const clipping = Collections.createClipping(
+    {
+      videoId: "abcdefghijk",
+      selectedText: "普通圈选",
+      anchorT: 3,
+      sourceType: "claim",
+    },
+    { id: "clip-1", now: 100 },
+  );
+  const first = Collections.createAnswerClipping(
+    {
+      videoId: "abcdefghijk",
+      targetLanguage: "zh-CN",
+      question: "为什么要避免循环工程？",
+      directAnswer: "第一版回答",
+      evidenceTs: [10],
+      steps: [],
+    },
+    { id: "answer-1", now: 200 },
+  );
+  let store = Collections.addClipping(null, clipping).store;
+  store = Collections.upsertAnswerClipping(store, first).store;
+  const second = Collections.createAnswerClipping(
+    {
+      ...first,
+      directAnswer: "追问后的最新版回答",
+      evidenceTs: [20],
+    },
+    { id: "answer-2", now: 300 },
+  );
+  const updated = Collections.upsertAnswerClipping(store, second);
+  assert.deepEqual(updated.replacedIds, ["answer-1"]);
+  const view = Collections.listClippings([updated.store]);
+  assert.equal(view.length, 2);
+  assert.equal(view.filter((item) => item.kind === "answer").length, 1);
+  assert.equal(
+    view.find((item) => item.kind === "answer").directAnswer,
+    "追问后的最新版回答",
+  );
+  assert.ok(view.some((item) => item.id === "clip-1"));
+});
+
+test("答卷搜索覆盖问题、正文、步骤和提示字段", () => {
+  const answer = Collections.createAnswerClipping(
+    {
+      videoId: "abcdefghijk",
+      targetLanguage: "zh-CN",
+      question: "如何设计评测？",
+      directAnswer: "先建立独立基线。",
+      evidenceTs: [10],
+      steps: [{ text: "隔离训练数据", sourceTs: [10] }],
+      notice: "字幕存在转写误差",
+    },
+    { id: "answer-search", now: 1000 },
+  );
+  for (const query of ["评测", "独立基线", "训练数据", "转写误差"]) {
+    assert.equal(Collections.searchClippings([answer], query).length, 1);
+  }
 });

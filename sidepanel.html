@@ -126,6 +126,45 @@
         <div id="yvpm-intent-chips" class="yvpm-intent-chips" aria-label="推荐观看需求"></div>
         <div id="yvpm-intent-feedback" class="yvpm-intent-feedback" hidden aria-live="polite"></div>
       </section>
+      <section id="yvpm-answer" class="yvpm-answer" hidden aria-live="polite">
+        <header class="yvpm-answer-header">
+          <div class="yvpm-answer-heading">
+            <span class="yvpm-answer-kicker">答卷</span>
+            <h2 id="yvpm-answer-question"></h2>
+          </div>
+          <button id="yvpm-answer-clear" class="yvpm-answer-clear" type="button" aria-label="清除答卷">×</button>
+        </header>
+        <div id="yvpm-answer-loading" class="yvpm-answer-loading" hidden>
+          <span class="yvpm-spinner" aria-hidden="true"></span>
+          <span id="yvpm-answer-loading-copy">正在综合摘要…</span>
+        </div>
+        <div id="yvpm-answer-content" class="yvpm-answer-content" hidden>
+          <p id="yvpm-answer-direct" class="yvpm-answer-direct"></p>
+          <div id="yvpm-answer-evidence" class="yvpm-answer-evidence"></div>
+          <div id="yvpm-answer-steps-wrap" class="yvpm-answer-steps-wrap">
+            <h3>步骤与要点</h3>
+            <ol id="yvpm-answer-steps" class="yvpm-answer-steps"></ol>
+          </div>
+          <p id="yvpm-answer-caption-note" class="yvpm-answer-note" hidden>已结合原字幕补充</p>
+          <p id="yvpm-answer-notice" class="yvpm-answer-notice" hidden></p>
+          <div id="yvpm-answer-error" class="yvpm-answer-error" hidden></div>
+          <div class="yvpm-answer-actions">
+            <button id="yvpm-answer-save" type="button">收藏这份答卷</button>
+            <button id="yvpm-answer-switch" type="button">改为查找相关观点</button>
+          </div>
+          <form id="yvpm-answer-followup-form" class="yvpm-answer-followup-form">
+            <div class="yvpm-answer-followup-meta">
+              <label for="yvpm-answer-followup">继续追问</label>
+              <span id="yvpm-answer-followup-count">0 / 2</span>
+            </div>
+            <div class="yvpm-answer-followup-row">
+              <input id="yvpm-answer-followup" type="text" maxlength="200" autocomplete="off" placeholder="让这份答卷更具体…" />
+              <button id="yvpm-answer-followup-submit" type="submit">追问</button>
+            </div>
+          </form>
+          <p id="yvpm-answer-complete" class="yvpm-answer-complete" hidden>这份答卷已完成 2 轮追问。重新提问可以开始新的答卷。</p>
+        </div>
+      </section>
       <div id="yvpm-matchbar" class="yvpm-matchbar" hidden aria-live="polite">
         <span id="yvpm-matchbar-text"></span>
         <div class="yvpm-matchbar-actions">

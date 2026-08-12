@@ -37,6 +37,7 @@
     tabId: null,
     videoId: "",
     videoTitle: "",
+    libraryTitle: "",
     loaded: false,
     loading: false,
     preparing: false,
@@ -104,9 +105,20 @@
     explanationDrawerOpen: false,
     explanationDismissed: false,
     explanationSourceTabId: null,
+    answerTaskId: "",
+    answerTaskStatus: "idle",
+    answerQuestion: "",
+    answerResult: null,
+    answerTurns: 0,
+    answerTaskVersion: 0,
+    answerRequestId: 0,
+    answerCaptionUpgradeKey: "",
+    answerSavedFingerprint: "",
+    answerNewQuestionNotice: "",
     activeView: "summary",
     summaryScrollTop: 0,
     clippings: [],
+    videoTitles: [],
     clippingsRevision: 0,
     libraryRequestId: 0,
     libraryError: "",
@@ -138,6 +150,26 @@
     intentSubmit: document.querySelector("#yvpm-intent-submit"),
     intentChips: document.querySelector("#yvpm-intent-chips"),
     intentFeedback: document.querySelector("#yvpm-intent-feedback"),
+    answer: document.querySelector("#yvpm-answer"),
+    answerQuestion: document.querySelector("#yvpm-answer-question"),
+    answerClear: document.querySelector("#yvpm-answer-clear"),
+    answerLoading: document.querySelector("#yvpm-answer-loading"),
+    answerLoadingCopy: document.querySelector("#yvpm-answer-loading-copy"),
+    answerContent: document.querySelector("#yvpm-answer-content"),
+    answerDirect: document.querySelector("#yvpm-answer-direct"),
+    answerEvidence: document.querySelector("#yvpm-answer-evidence"),
+    answerStepsWrap: document.querySelector("#yvpm-answer-steps-wrap"),
+    answerSteps: document.querySelector("#yvpm-answer-steps"),
+    answerCaptionNote: document.querySelector("#yvpm-answer-caption-note"),
+    answerNotice: document.querySelector("#yvpm-answer-notice"),
+    answerError: document.querySelector("#yvpm-answer-error"),
+    answerSave: document.querySelector("#yvpm-answer-save"),
+    answerSwitch: document.querySelector("#yvpm-answer-switch"),
+    answerFollowupForm: document.querySelector("#yvpm-answer-followup-form"),
+    answerFollowup: document.querySelector("#yvpm-answer-followup"),
+    answerFollowupCount: document.querySelector("#yvpm-answer-followup-count"),
+    answerFollowupSubmit: document.querySelector("#yvpm-answer-followup-submit"),
+    answerComplete: document.querySelector("#yvpm-answer-complete"),
     matchbar: document.querySelector("#yvpm-matchbar"),
     matchbarText: document.querySelector("#yvpm-matchbar-text"),
     matchRelated: document.querySelector("#yvpm-match-related"),
@@ -277,6 +309,13 @@
   function resolveTargetLanguage(setting = state.languageSetting) {
     const requested = setting === "auto" ? navigator.language : setting;
     return normalizeTargetLanguage(requested);
+  }
+
+  function cleanVideoTitle(value) {
+    return String(value || "")
+      .replace(/\s*-\s*YouTube\s*$/i, "")
+      .replace(/^\s*[\(（]\d+[\)）]\s*/, "")
+      .trim();
   }
 
   function normalizeTextScale(value) {
@@ -812,6 +851,10 @@
     return SkimlineCollections.groupClippingsByVideo(
       state.clippings,
       rawQuery,
+      {
+        videoTitles: state.videoTitles,
+        targetLanguage: state.targetLanguage,
+      },
     );
   }
 
@@ -874,8 +917,54 @@
 
     const remove = makeElement("button", "yvpm-clipping-delete", "×");
     remove.type = "button";
-    remove.setAttribute("aria-label", `删除收藏：${item.selectedText}`);
+    remove.setAttribute(
+      "aria-label",
+      `删除收藏：${item.kind === "answer" ? item.question : item.selectedText}`,
+    );
     remove.addEventListener("click", () => deleteClippingById(item.id));
+
+    if (item.kind === "answer") {
+      const badge = makeElement("span", "yvpm-answer-kicker", "答卷 · 来自提问");
+      const question = makeElement(
+        "p",
+        "yvpm-clipping-context",
+        item.question,
+      );
+      const direct = makeElement(
+        "blockquote",
+        "yvpm-clipping-quote",
+        item.directAnswer,
+      );
+      card.append(remove, badge, question, direct);
+      if (item.steps?.length) {
+        const list = makeElement("ol", "yvpm-answer-steps");
+        for (const step of item.steps) {
+          list.append(makeElement("li", "", step.text));
+        }
+        card.append(list);
+      }
+      if (item.notice) {
+        card.append(makeElement("p", "yvpm-answer-notice", item.notice));
+      }
+      const footer = makeElement("footer", "yvpm-clipping-footer");
+      const source = makeElement("button", "yvpm-clipping-source");
+      source.type = "button";
+      source.setAttribute(
+        "aria-label",
+        `回到视频 ${item.videoTitle} ${clippingSourceLabel(item)}`,
+      );
+      source.append(
+        makeElement(
+          "span",
+          "yvpm-clipping-source-meta",
+          `${clippingSourceLabel(item)} · ${YouTubeSummary.formatLibraryDate(item.savedAt)}`,
+        ),
+      );
+      source.addEventListener("click", () => openClippingSource(item));
+      footer.append(source);
+      card.append(footer);
+      return card;
+    }
 
     const quote = makeElement(
       "blockquote",
@@ -945,25 +1034,58 @@
     );
     count.setAttribute("aria-hidden", "true");
     const copy = makeElement("span", "yvpm-video-group-copy");
+    const normalizedLibraryTitle = SkimlineCollections.normalizeClippingText(
+      group.libraryTitle,
+    );
+    const normalizedOriginTitle = SkimlineCollections.normalizeClippingText(
+      group.videoTitle,
+    );
+    const hasDistinctLibraryTitle = Boolean(
+      normalizedLibraryTitle &&
+        normalizedLibraryTitle.normalize("NFKC").toLocaleLowerCase() !==
+          normalizedOriginTitle.normalize("NFKC").toLocaleLowerCase(),
+    );
+    const displayTitle = hasDistinctLibraryTitle
+      ? normalizedLibraryTitle
+      : normalizedOriginTitle;
+    copy.classList.toggle(
+      "yvpm-video-group-copy-localized",
+      hasDistinctLibraryTitle,
+    );
     const title = makeElement(
       "span",
       "yvpm-video-group-title",
-      group.videoTitle,
+      displayTitle,
+    );
+    title.classList.toggle(
+      "yvpm-video-group-title-localized",
+      hasDistinctLibraryTitle,
     );
     const metaCopy =
       currentLibraryQuery() && group.visibleCount < group.totalCount
         ? `匹配 ${group.visibleCount} 条 · 共 ${group.totalCount} 条收藏`
         : `${group.totalCount} 条收藏 · 最近收藏于${YouTubeSummary.formatLibraryDate(group.latestSavedAt)}`;
     const meta = makeElement("span", "yvpm-video-group-meta", metaCopy);
-    copy.append(title, meta);
+    copy.append(title);
+    if (hasDistinctLibraryTitle) {
+      const origin = makeElement(
+        "span",
+        "yvpm-video-group-origin",
+        normalizedOriginTitle,
+      );
+      origin.setAttribute("aria-hidden", "true");
+      copy.append(origin);
+    }
+    copy.append(meta);
     const chevron = makeElement("span", "yvpm-video-group-chevron", "⌄");
     chevron.setAttribute("aria-hidden", "true");
     toggle.append(count, copy, chevron);
+    toggle.setAttribute("aria-label", `${displayTitle}，${metaCopy}`);
 
     const body = makeElement("div", "yvpm-video-group-body");
     body.id = videoGroupDomId(group.videoId);
     body.setAttribute("role", "list");
-    body.setAttribute("aria-label", `${group.videoTitle}的收藏`);
+    body.setAttribute("aria-label", `${displayTitle}的收藏`);
     body.hidden = !expanded;
     if (expanded) populateVideoGroupBody(body, group);
 
@@ -1054,6 +1176,9 @@
         return false;
       }
       state.clippings = SkimlineCollections.buildClippingsView(response.items);
+      state.videoTitles = SkimlineCollections.normalizeVideoTitles(
+        response.videoTitles,
+      );
       state.clippingsRevision = Math.max(0, Number(response.revision) || 0);
       state.libraryError = "";
       reconcileLibraryExpansionState();
@@ -1869,6 +1994,44 @@
     }
   }
 
+  async function saveCurrentAnswer() {
+    const answer = state.answerResult;
+    if (!answer || !state.videoId || elements.answerSave.disabled) return;
+    elements.answerSave.disabled = true;
+    try {
+      const response = await runtimeMessage({
+        type: "SAVE_ANSWER_CLIPPING",
+        payload: {
+          kind: "answer",
+          videoId: state.videoId,
+          videoTitle: state.videoTitle,
+          targetLanguage: state.targetLanguage,
+          question: state.answerQuestion,
+          directAnswer: answer.directAnswer,
+          evidenceTs: answer.evidenceTs,
+          steps: answer.steps,
+          uncertain: answer.uncertain,
+          notice: answer.notice,
+          usedCaptions: answer.usedCaptions,
+        },
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "收藏答卷失败，请重试");
+      }
+      state.clippingsRevision = Math.max(
+        state.clippingsRevision,
+        Number(response.revision) || 0,
+      );
+      upsertClipping(response.item);
+      state.answerSavedFingerprint = answerFingerprint();
+      updateAnswerSaveButton();
+      showToast(response.replacedIds?.length ? "已更新收藏答卷" : "已收藏到洞见库");
+    } catch (error) {
+      showToast(error?.message || "收藏答卷失败，请重试");
+      updateAnswerSaveButton();
+    }
+  }
+
   async function copyExplanationSelection() {
     const text = state.explanationSelection?.text;
     if (!text) return;
@@ -2007,6 +2170,355 @@
     elements.progressText.textContent =
       `生成中 · ${state.receivedChunkIndexes.size}/${state.totalChunks} 段`;
     elements.progress.hidden = false;
+  }
+
+  function answerClientId() {
+    return `answer-tab-${Number.isInteger(state.tabId) ? state.tabId : "none"}`;
+  }
+
+  function answerOperationId(prefix = "answer") {
+    return `${prefix}-${Date.now().toString(36)}-${Math.random()
+      .toString(36)
+      .slice(2, 10)}`;
+  }
+
+  function answerFingerprint(answer = state.answerResult) {
+    if (!answer) return "";
+    return JSON.stringify([
+      state.answerQuestion,
+      answer.directAnswer,
+      answer.evidenceTs,
+      (answer.steps || []).map((step) => [step.text, step.sourceTs]),
+      Boolean(answer.uncertain),
+      String(answer.notice || ""),
+      Boolean(answer.usedCaptions),
+    ]);
+  }
+
+  function savedAnswerFingerprint(item) {
+    if (item?.kind !== "answer") return "";
+    return JSON.stringify([
+      item.question,
+      item.directAnswer,
+      item.evidenceTs,
+      (item.steps || []).map((step) => [step.text, step.sourceTs]),
+      Boolean(item.uncertain),
+      String(item.notice || ""),
+      Boolean(item.usedCaptions),
+    ]);
+  }
+
+  function syncAnswerSavedFingerprint() {
+    const normalizedQuestion = YouTubeSummary.normalizeAnswerQuestion(
+      state.answerQuestion,
+    );
+    const saved = state.clippings.find(
+      (item) =>
+        item.kind === "answer" &&
+        item.videoId === state.videoId &&
+        item.targetLanguage === state.targetLanguage &&
+        YouTubeSummary.normalizeAnswerQuestion(item.question) ===
+          normalizedQuestion,
+    );
+    state.answerSavedFingerprint = savedAnswerFingerprint(saved);
+  }
+
+  function updateAnswerSaveButton() {
+    if (!state.answerResult) {
+      elements.answerSave.disabled = true;
+      elements.answerSave.textContent = "收藏这份答卷";
+      return;
+    }
+    const current = answerFingerprint();
+    elements.answerSave.disabled =
+      Boolean(state.answerSavedFingerprint) &&
+      state.answerSavedFingerprint === current;
+    elements.answerSave.textContent = elements.answerSave.disabled
+      ? "已收藏"
+      : state.answerSavedFingerprint
+        ? "更新收藏"
+        : "收藏这份答卷";
+  }
+
+  function createAnswerTimeButton(timestamp, labelPrefix = "跳到依据") {
+    const value = Math.max(0, Math.floor(Number(timestamp) || 0));
+    const button = makeElement(
+      "button",
+      "yvpm-answer-time",
+      YouTubeSummary.formatTimestamp(value),
+    );
+    button.type = "button";
+    button.setAttribute(
+      "aria-label",
+      `${labelPrefix} ${YouTubeSummary.formatTimestamp(value)}`,
+    );
+    button.addEventListener("click", () => {
+      void seekWithFeedback(value, { followPlayback: true });
+    });
+    return button;
+  }
+
+  function renderAnswerTask(task = null) {
+    const status = String(task?.status || state.answerTaskStatus || "idle");
+    const answer = state.answerResult;
+    const busy = status === "queued" || status === "running";
+    elements.answer.hidden = false;
+    elements.answerQuestion.textContent = state.answerQuestion;
+    elements.answerLoading.hidden = Boolean(answer) || !busy;
+    elements.answerLoadingCopy.textContent =
+      status === "queued" ? "答卷正在排队…" : "正在综合摘要…";
+    elements.answerContent.hidden = !answer;
+    if (!answer) {
+      if (status === "failed") {
+        elements.answerLoading.hidden = true;
+        elements.answerContent.hidden = false;
+        elements.answerDirect.textContent = "";
+        elements.answerEvidence.replaceChildren();
+        elements.answerSteps.replaceChildren();
+        elements.answerStepsWrap.hidden = true;
+        elements.answerCaptionNote.hidden = true;
+        elements.answerNotice.hidden = true;
+        elements.answerComplete.hidden = true;
+        elements.answerError.hidden = false;
+        const retry = makeElement("button", "yvpm-intent-retry", "重试");
+        retry.type = "button";
+        retry.addEventListener("click", () => {
+          void runAnswer(state.answerQuestion, { force: true });
+        });
+        elements.answerError.replaceChildren(
+          document.createTextNode(task?.error || "答卷生成失败，请重试。"),
+          document.createTextNode(" "),
+          retry,
+        );
+        elements.answerSave.disabled = true;
+        elements.answerFollowupForm.hidden = true;
+      }
+      return;
+    }
+
+    elements.answerDirect.textContent = answer.directAnswer;
+    elements.answerEvidence.replaceChildren(
+      ...(answer.evidenceTs || []).map((timestamp) =>
+        createAnswerTimeButton(timestamp),
+      ),
+    );
+    const stepItems = (answer.steps || []).map((step) => {
+      const item = makeElement("li");
+      const copy = makeElement("span", "yvpm-answer-step-copy", step.text);
+      item.append(copy);
+      for (const timestamp of step.sourceTs || []) {
+        item.append(createAnswerTimeButton(timestamp, "跳到步骤依据"));
+      }
+      return item;
+    });
+    elements.answerSteps.replaceChildren(...stepItems);
+    elements.answerStepsWrap.hidden = !stepItems.length;
+    elements.answerCaptionNote.hidden = !answer.usedCaptions;
+    elements.answerNotice.textContent = String(answer.notice || "");
+    elements.answerNotice.hidden = !answer.notice;
+    elements.answerError.hidden = status !== "failed" || !task?.error;
+    elements.answerError.textContent =
+      status === "failed" ? String(task?.error || "") : "";
+    elements.answerFollowupCount.textContent = `${state.answerTurns} / 2`;
+    const complete = state.answerTurns >= 2;
+    elements.answerFollowupForm.hidden = complete;
+    elements.answerComplete.hidden = !complete;
+    elements.answerFollowup.disabled = busy;
+    elements.answerFollowupSubmit.disabled = busy;
+    updateAnswerSaveButton();
+  }
+
+  async function requestAnswerCaptionUpgrade(task) {
+    const upgrade = task?.captionUpgrade;
+    if (upgrade?.status !== "requested") return;
+    const key = `${task.taskId}:${upgrade.operationId}:${upgrade.taskVersion}`;
+    if (state.answerCaptionUpgradeKey === key) return;
+    state.answerCaptionUpgradeKey = key;
+    let segments = [];
+    try {
+      const captions = await getExplanationCaptions(
+        task.videoId,
+        task.sourceTabId,
+      );
+      segments = captions.segments;
+    } catch {
+      // fallback 已是终态；空数组只用于把升级标记为 unavailable。
+    }
+    if (
+      task.taskId !== state.answerTaskId ||
+      Number(upgrade.taskVersion) !== state.answerTaskVersion
+    ) {
+      return;
+    }
+    try {
+      const response = await runtimeMessage({
+        type: "CONTINUE_ANSWER_WITH_CAPTIONS",
+        payload: {
+          clientId: answerClientId(),
+          taskId: task.taskId,
+          operationId: upgrade.operationId,
+          taskVersion: upgrade.taskVersion,
+          segments,
+        },
+      });
+      if (response?.ok && response.task) applyAnswerTask(response.task);
+    } catch {
+      // 升级失败不覆盖已经展示的 fallback。
+    }
+  }
+
+  function applyAnswerTask(task) {
+    if (!task?.taskId) return;
+    if (task.taskId === state.answerTaskId) {
+      const incomingVersion = Math.max(0, Number(task.taskVersion) || 0);
+      if (incomingVersion < state.answerTaskVersion) return;
+      if (
+        incomingVersion === state.answerTaskVersion &&
+        state.answerTaskStatus === "ready" &&
+        ["queued", "running"].includes(String(task.status || ""))
+      ) {
+        return;
+      }
+    }
+    state.answerTaskId = task.taskId;
+    state.answerTaskStatus = String(task.status || "idle");
+    state.answerQuestion = String(task.question || state.answerQuestion);
+    state.answerResult = task.answer || state.answerResult;
+    state.answerTurns = Math.max(0, Number(task.turns) || 0);
+    state.answerTaskVersion = Math.max(0, Number(task.taskVersion) || 0);
+    if (
+      task.newQuestionNotice &&
+      task.newQuestionNotice !== state.answerNewQuestionNotice
+    ) {
+      state.answerNewQuestionNotice = task.newQuestionNotice;
+      showToast(task.newQuestionNotice);
+    }
+    syncAnswerSavedFingerprint();
+    renderAnswerTask(task);
+    if (task.captionUpgrade?.status === "requested") {
+      void requestAnswerCaptionUpgrade(task);
+    }
+  }
+
+  function clearAnswerLocal() {
+    state.answerRequestId += 1;
+    state.answerTaskId = "";
+    state.answerTaskStatus = "idle";
+    state.answerQuestion = "";
+    state.answerResult = null;
+    state.answerTurns = 0;
+    state.answerTaskVersion = 0;
+    state.answerCaptionUpgradeKey = "";
+    state.answerSavedFingerprint = "";
+    state.answerNewQuestionNotice = "";
+    elements.answer.hidden = true;
+    elements.answerContent.hidden = true;
+    elements.answerLoading.hidden = true;
+    elements.answerFollowup.value = "";
+  }
+
+  function cancelAnswerContext(reason = "context_changed") {
+    const message = state.answerTaskId
+      ? { type: "CANCEL_ANSWER", taskId: state.answerTaskId, reason }
+      : { type: "CANCEL_ANSWER", clientId: answerClientId(), reason };
+    runtimeMessage(message).catch(() => null);
+    clearAnswerLocal();
+  }
+
+  async function restoreAnswerTaskForVideo(videoId) {
+    if (!videoId || !Number.isInteger(state.tabId)) return;
+    try {
+      const response = await runtimeMessage({
+        type: "GET_ANSWER_TASK",
+        clientId: answerClientId(),
+        videoId,
+        sourceTabId: state.tabId,
+      });
+      if (
+        response?.ok &&
+        response.task &&
+        !response.task.dismissed &&
+        response.task.videoId === state.videoId &&
+        response.task.targetLanguage === state.targetLanguage &&
+        !["cancelled", "expired"].includes(response.task.status)
+      ) {
+        applyAnswerTask(response.task);
+      }
+    } catch {
+      // 答卷恢复失败不影响摘要与导航。
+    }
+  }
+
+  async function runAnswer(rawQuestion, { force = false } = {}) {
+    const question = String(rawQuestion || "").trim();
+    if (!question || !state.loaded || !state.videoId) return;
+    if (force && state.answerTaskId) {
+      await runtimeMessage({
+        type: "CANCEL_ANSWER",
+        taskId: state.answerTaskId,
+        reason: "retry",
+      }).catch(() => null);
+      clearAnswerLocal();
+    }
+    setFollowPlayback(false);
+    clearRecommendation({ restoreSections: true });
+    const requestId = ++state.answerRequestId;
+    // 新问题等待 Background 建立新 taskId 时先断开旧任务广播，避免旧取消快照污染 UI。
+    state.answerTaskId = "";
+    state.answerQuestion = question;
+    state.answerResult = null;
+    state.answerTaskStatus = "queued";
+    state.answerTurns = 0;
+    state.answerNewQuestionNotice = "";
+    elements.intentInput.value = question;
+    renderAnswerTask({ status: "queued" });
+    try {
+      const response = await runtimeMessage({
+        type: "START_ANSWER",
+        payload: {
+          clientId: answerClientId(),
+          sourceTabId: state.tabId,
+          videoId: state.videoId,
+          videoTitle: state.videoTitle,
+          targetLanguage: state.targetLanguage,
+          question,
+          operationId: answerOperationId("initial"),
+        },
+      });
+      if (requestId !== state.answerRequestId || question !== state.answerQuestion) {
+        return;
+      }
+      if (!response?.ok) throw new Error(response?.error || "答卷生成失败");
+      applyAnswerTask(response.task);
+    } catch (error) {
+      if (requestId !== state.answerRequestId) return;
+      state.answerTaskStatus = "failed";
+      renderAnswerTask({ status: "failed", error: error?.message });
+    }
+  }
+
+  function updateIntentSubmitLabel() {
+    elements.intentSubmit.textContent =
+      YouTubeSummary.classifyIntent(elements.intentInput.value) === "answer"
+        ? "回答"
+        : "查找";
+  }
+
+  function showAnswerSwitchCta(question) {
+    const button = makeElement(
+      "button",
+      "yvpm-intent-retry",
+      "综合成一份答卷",
+    );
+    button.type = "button";
+    button.addEventListener("click", () => void runAnswer(question));
+    elements.intentFeedback.replaceChildren(
+      document.createTextNode("这段输入也可能是在提问。"),
+      document.createTextNode(" "),
+      button,
+    );
+    elements.intentFeedback.className = "yvpm-intent-feedback";
+    elements.intentFeedback.hidden = false;
   }
 
   function setIntentBusy(busy) {
@@ -2365,6 +2877,22 @@
     }
   }
 
+  async function routeIntent(rawIntent) {
+    const intent = String(rawIntent || "").trim();
+    if (!intent) {
+      await runRecommendation(intent);
+      return;
+    }
+    const route = YouTubeSummary.classifyIntent(intent);
+    if (route === "answer") {
+      await runAnswer(intent);
+      return;
+    }
+    if (state.answerTaskId) cancelAnswerContext("switched_to_navigation");
+    await runRecommendation(intent);
+    if (route === "ambiguous") showAnswerSwitchCta(intent);
+  }
+
   async function runSemanticSupplement() {
     const intent = state.recommendationIntent;
     if (
@@ -2521,6 +3049,7 @@
     setIntentBusy(false);
     setIntentFeedback("");
     elements.intent.hidden = false;
+    updateIntentSubmitLabel();
     loadDefaultRecommendations(summary);
   }
 
@@ -2942,7 +3471,7 @@
       state.points,
       points,
     );
-    const fragment = document.createDocumentFragment();
+    const orderedRows = [];
     for (const point of mergedPoints) {
       const key = YouTubeSummary.pointStableKey(state.videoId, point);
       let row = state.pointRows.get(key);
@@ -2952,9 +3481,9 @@
       } else {
         updatePointRow(row, point, insightMap.get(point.t) || null);
       }
-      fragment.append(row);
+      orderedRows.push(row);
     }
-    elements.list.append(fragment);
+    YouTubeSummary.reconcileRowOrder(elements.list, orderedRows);
     state.points = mergedPoints;
     setListHeading("关键观点", `${state.points.length} 条观点`);
     updateNowPlaying({
@@ -3003,6 +3532,7 @@
   function renderSummary(summary, { anchor = null } = {}) {
     const hadPoints = state.points.length > 0;
     clearPoints({ preserveOverview: true });
+    state.libraryTitle = YouTubeSummary.libraryTitleFromSummary(summary);
     const points = YouTubeSummary.dedupePointsByTimestamp(summary?.points);
     const groups = YouTubeSummary.groupPointsBySections(
       points,
@@ -3015,6 +3545,7 @@
     if (!groups.length) {
       mergePoints(points, false, insightMap);
       renderIntentControls(summary);
+      void restoreAnswerTaskForVideo(state.videoId);
       if (elements.overview.hidden) showOverviewError();
       void showClippingHintOnce();
       return finishSummaryRender(anchor, { scroll: hadPoints });
@@ -3033,6 +3564,7 @@
     elements.list.append(fragment);
     setListHeading("关键章节", `${groups.length} 个章节`);
     renderIntentControls(summary);
+    void restoreAnswerTaskForVideo(state.videoId);
     if (elements.overview.hidden) showOverviewError();
     void showClippingHintOnce();
     return finishSummaryRender(anchor, { scroll: hadPoints });
@@ -3115,6 +3647,11 @@
     restoreReadingAnchor(anchor, restoredRow);
     applyPendingPlaybackRestore();
     state.finalizedGenerationId = finalizationKey;
+    void ensureLibraryTitleForSummary(
+      state.videoId,
+      state.targetLanguage,
+      state.epoch,
+    );
     return true;
   }
 
@@ -3171,7 +3708,7 @@
       state.videoId === nextVideoId &&
       (state.loading || state.loaded || state.preparing)
     ) {
-      if (videoTitle) state.videoTitle = videoTitle;
+      if (videoTitle) state.videoTitle = cleanVideoTitle(videoTitle);
       state.currentTime = YouTubeSummary.playbackTimeOr(
         currentTime,
         state.currentTime,
@@ -3185,14 +3722,16 @@
     const restoreSnapshot = nextVideoId
       ? state.playbackSnapshots.get(nextTabId, nextVideoId)
       : null;
+    cancelAnswerContext("video_changed");
     resetExplanationContext();
     state.activeTabSyncId += 1;
     state.epoch += 1;
     state.tabId = nextTabId;
     state.videoId = nextVideoId;
     state.videoTitle = nextVideoId
-      ? String(videoTitle || "").trim() || `YouTube 视频 ${nextVideoId}`
+      ? cleanVideoTitle(videoTitle) || `YouTube 视频 ${nextVideoId}`
       : "";
+    state.libraryTitle = "";
     state.loaded = false;
     state.loading = false;
     state.preparing = false;
@@ -3402,6 +3941,33 @@
     }
   }
 
+  async function ensureLibraryTitleForSummary(
+    videoId,
+    targetLanguage,
+    epoch,
+  ) {
+    try {
+      const response = await runtimeMessage({
+        type: "ENSURE_LIBRARY_TITLE",
+        videoId,
+        targetLanguage,
+      });
+      if (
+        !response?.ok ||
+        state.videoId !== videoId ||
+        state.targetLanguage !== targetLanguage ||
+        state.epoch !== epoch
+      ) {
+        return;
+      }
+      state.libraryTitle = YouTubeSummary.libraryTitleFromSummary(
+        response.summary,
+      );
+    } catch {
+      // 标题是洞见库增强字段，回填失败不影响现有摘要。
+    }
+  }
+
   async function loadSummary({ immediate = false } = {}) {
     const videoId = state.videoId;
     const epoch = state.epoch;
@@ -3436,6 +4002,7 @@
         state.loaded = true;
         hideProgress();
         setStatus("");
+        void ensureLibraryTitleForSummary(videoId, targetLanguage, epoch);
         return;
       }
 
@@ -3511,9 +4078,7 @@
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (syncId !== state.activeTabSyncId) return;
     const nextTabId = Number.isInteger(tab?.id) ? tab.id : null;
-    const nextVideoTitle = String(tab?.title || "")
-      .replace(/\s*-\s*YouTube\s*$/i, "")
-      .trim();
+    const nextVideoTitle = cleanVideoTitle(tab?.title);
     if (!nextTabId) {
       switchToVideo({ tabId: null });
       return;
@@ -3551,6 +4116,15 @@
   }
 
   chrome.runtime.onMessage.addListener((message, sender) => {
+    if (
+      message?.type === "ANSWER_TASK_UPDATED" &&
+      message.task?.taskId === state.answerTaskId &&
+      message.task.videoId === state.videoId &&
+      message.task.targetLanguage === state.targetLanguage
+    ) {
+      applyAnswerTask(message.task);
+      return;
+    }
     if (
       message?.type === "CONTEXT_EXPLANATION_TASK_UPDATED" &&
       message.task?.taskId === state.explanationTaskId &&
@@ -3688,9 +4262,7 @@
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (tabId !== state.tabId) return;
     if (changeInfo.title) {
-      state.videoTitle = String(changeInfo.title)
-        .replace(/\s*-\s*YouTube\s*$/i, "")
-        .trim();
+      state.videoTitle = cleanVideoTitle(changeInfo.title);
     }
     if (changeInfo.url) {
       const videoId = YouTubeSummary.getVideoId(changeInfo.url);
@@ -3710,7 +4282,64 @@
 
   elements.intentForm.addEventListener("submit", (event) => {
     event.preventDefault();
-    runRecommendation(elements.intentInput.value);
+    void routeIntent(elements.intentInput.value);
+  });
+  elements.intentInput.addEventListener("input", updateIntentSubmitLabel);
+  elements.answerClear.addEventListener("click", () => {
+    if (state.answerTaskId) {
+      runtimeMessage({
+        type: "CLEAR_ANSWER",
+        taskId: state.answerTaskId,
+      }).catch(() => null);
+    }
+    clearAnswerLocal();
+  });
+  elements.answerSwitch.addEventListener("click", () => {
+    const question = state.answerQuestion;
+    if (state.answerTaskId) cancelAnswerContext("switched_to_navigation");
+    elements.intentInput.value = question;
+    updateIntentSubmitLabel();
+    void runRecommendation(question);
+  });
+  elements.answerSave.addEventListener("click", () => {
+    void saveCurrentAnswer();
+  });
+  elements.answerFollowupForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const question = String(elements.answerFollowup.value || "").trim();
+    if (
+      !question ||
+      !state.answerTaskId ||
+      !state.answerResult ||
+      state.answerTurns >= 2 ||
+      ["queued", "running"].includes(state.answerTaskStatus)
+    ) {
+      return;
+    }
+    elements.answerFollowup.value = "";
+    state.answerTaskStatus = "queued";
+    renderAnswerTask({ status: "queued" });
+    try {
+      const response = await runtimeMessage({
+        type: "ASK_ANSWER_FOLLOWUP",
+        payload: {
+          clientId: answerClientId(),
+          sourceTabId: state.tabId,
+          taskId: state.answerTaskId,
+          question,
+          expectedTurn: state.answerTurns,
+          operationId: answerOperationId("followup"),
+        },
+      });
+      if (!response?.ok) {
+        throw new Error(response?.error || "追问失败，请重试");
+      }
+      applyAnswerTask(response.task);
+    } catch (error) {
+      state.answerTaskStatus = "ready";
+      renderAnswerTask({ status: "ready" });
+      showToast(error?.message || "追问失败，请重试");
+    }
   });
   elements.followPlayback.addEventListener("click", () => {
     state.pendingPlaybackRestore = null;
@@ -3820,8 +4449,10 @@
       }
       cancelExplanationRequest("language_changed");
       closeExplanation({ dismiss: false, clearTask: true });
+      cancelAnswerContext("language_changed");
       state.languageSetting = nextSetting;
       updateLanguageControl();
+      if (state.activeView === "library") renderLibrary();
       await chrome.storage.local.set({
         [LANGUAGE_SETTING_KEY]: state.languageSetting,
       });
@@ -3837,6 +4468,7 @@
         tabId: state.tabId,
       }).catch(() => null);
       state.epoch += 1;
+      state.libraryTitle = "";
       state.loaded = false;
       state.loading = false;
       state.activeGenerationId = "";
@@ -3909,8 +4541,13 @@
       changes[SkimlineCollections.CLIPPINGS_STORAGE_KEY].newValue,
     );
     state.clippings = SkimlineCollections.listClippings([store]);
+    state.videoTitles = store.videoTitles;
     state.clippingsRevision = store.revision;
     state.libraryError = "";
+    if (state.answerResult) {
+      syncAnswerSavedFingerprint();
+      updateAnswerSaveButton();
+    }
     reconcileLibraryExpansionState();
     initializeVisibleLibraryExpansion();
     updateLibraryCount();

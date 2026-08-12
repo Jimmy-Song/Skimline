@@ -143,6 +143,14 @@ test("洞见库视频分组适配文字放大、窄侧栏和固定删除点击�
   );
   assert.match(
     css,
+    /\.yvpm-video-group-origin\s*\{[\s\S]*?color: var\(--text-secondary\);[\s\S]*?0\.59375rem[\s\S]*?text-overflow: ellipsis/,
+  );
+  assert.match(
+    css,
+    /\.yvpm-video-group-copy-localized \.yvpm-video-group-meta\s*\{[\s\S]*?var\(--font-time\)/,
+  );
+  assert.match(
+    css,
     /\.yvpm-clipping-delete\s*\{[\s\S]*?width: 40px;[\s\S]*?height: 40px/,
   );
   assert.match(

@@ -11,6 +11,7 @@ const SkimlineCollections = require("../collection-utils.js");
 function createStorage(initial = {}) {
   const data = { ...initial };
   return {
+    data,
     async get(keys) {
       if (keys == null) return { ...data };
       if (typeof keys === "string") return { [keys]: data[keys] };
@@ -83,7 +84,7 @@ function createHarness(executeScript, summaryOverrides = {}, options = {}) {
     setTimeout,
     clearTimeout,
     chrome,
-    YouTubeSummary: summaryOverrides,
+    YouTubeSummary: { ...YouTubeSummary, ...summaryOverrides },
     SkimlineCollections,
     importScripts() {},
   });
@@ -160,6 +161,101 @@ test("收藏后台支持保存、去重、列出、删除和撤销", async () =>
   assert.equal(restored.duplicate, false);
   assert.notEqual(restored.item.id, saved.item.id);
   assert.equal(restored.count, 1);
+});
+
+test("保存队列按收藏语言重读 summary，duplicate 也能补写标题", async () => {
+  const storage = createStorage();
+  const harness = createHarness(async () => [], {}, { storage });
+  const payload = {
+    selectedText: "评估是 AI 产品的核心技能。",
+    videoId: "abcdefghijk",
+    videoTitle: "Why AI evals matter",
+    anchorT: 10,
+    sourceType: "claim",
+    targetLanguage: "ja",
+  };
+  const first = await harness.invoke({ type: "SAVE_CLIPPING", payload });
+  assert.equal(first.ok, true);
+  assert.equal(first.duplicate, false);
+  let listed = await harness.invoke({ type: "LIST_CLIPPINGS" });
+  assert.deepEqual(listed.videoTitles, []);
+
+  const summaryKey = YouTubeSummary.summaryCacheKey(payload.videoId, "ja");
+  storage.data[summaryKey] = {
+    videoId: payload.videoId,
+    targetLanguage: "ja",
+    schemaVersion: YouTubeSummary.SUMMARY_SCHEMA_VERSION,
+    promptVersion: YouTubeSummary.SUMMARY_PROMPT_VERSION,
+    libraryTitle: "AI製品評価の核心スキル",
+    libraryTitlePromptVersion: YouTubeSummary.LIBRARY_TITLE_PROMPT_VERSION,
+    libraryTitleStatus: "complete",
+    libraryTitleGeneratedAt: 2000,
+    points: [{ t: 10, point: "評価が重要", detail: "" }],
+  };
+  storage.data[YouTubeSummary.summaryCacheKey(payload.videoId, "zh-CN")] = {
+    ...storage.data[summaryKey],
+    targetLanguage: "zh-CN",
+    libraryTitle: "不应被写入的中文标题",
+  };
+
+  const duplicate = await harness.invoke({ type: "SAVE_CLIPPING", payload });
+  assert.equal(duplicate.ok, true);
+  assert.equal(duplicate.duplicate, true);
+  assert.equal(duplicate.revision, first.revision + 1);
+  listed = await harness.invoke({ type: "LIST_CLIPPINGS" });
+  assert.deepEqual(listed.videoTitles, [
+    {
+      videoId: payload.videoId,
+      targetLanguage: "ja",
+      title: "AI製品評価の核心スキル",
+      promptVersion: YouTubeSummary.LIBRARY_TITLE_PROMPT_VERSION,
+      generatedAt: 2000,
+    },
+  ]);
+});
+
+test("只看视频不污染收藏标题表，收藏落地后才条件写入", async () => {
+  const videoId = "zyxwvutsrqp";
+  const targetLanguage = "zh-CN";
+  const summaryKey = YouTubeSummary.summaryCacheKey(videoId, targetLanguage);
+  const storage = createStorage({
+    [summaryKey]: {
+      videoId,
+      targetLanguage,
+      schemaVersion: YouTubeSummary.SUMMARY_SCHEMA_VERSION,
+      promptVersion: YouTubeSummary.SUMMARY_PROMPT_VERSION,
+      libraryTitle: "用设计系统统一 AI 网页",
+      libraryTitlePromptVersion: YouTubeSummary.LIBRARY_TITLE_PROMPT_VERSION,
+      libraryTitleStatus: "complete",
+      libraryTitleGeneratedAt: 3000,
+      points: [{ t: 0, point: "设计系统", detail: "" }],
+    },
+  });
+  const harness = createHarness(async () => [], {}, { storage });
+  const ensured = await harness.invoke({
+    type: "ENSURE_LIBRARY_TITLE",
+    videoId,
+    targetLanguage,
+  });
+  assert.equal(ensured.ok, true);
+  assert.deepEqual(
+    (await harness.invoke({ type: "LIST_CLIPPINGS" })).videoTitles,
+    [],
+  );
+
+  const saved = await harness.invoke({
+    type: "SAVE_CLIPPING",
+    payload: {
+      selectedText: "创建可复用的设计系统",
+      videoId,
+      videoTitle: "Claude Design Full Tutorial",
+      sourceType: "overview",
+      targetLanguage,
+    },
+  });
+  assert.equal(saved.ok, true);
+  const listed = await harness.invoke({ type: "LIST_CLIPPINGS" });
+  assert.equal(listed.videoTitles[0].title, "用设计系统统一 AI 网页");
 });
 
 test("收藏后台迁移 v1，并完整导出导入 adds 与 removes", async () => {

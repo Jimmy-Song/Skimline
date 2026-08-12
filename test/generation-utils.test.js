@@ -5,6 +5,8 @@ const test = require("node:test");
 const {
   CONTEXT_EXPLANATION_SYSTEM_PROMPT,
   DEFAULT_RECOMMENDATION_PROMPT_VERSION,
+  LIBRARY_TITLE_PROMPT_VERSION,
+  LIBRARY_TITLE_RETRY_MS,
   DEFAULT_RECOMMENDATION_SYSTEM_PROMPT,
   SUMMARY_PROMPT_VERSION,
   SUMMARY_SCHEMA_VERSION,
@@ -14,6 +16,7 @@ const {
   STRUCTURE_SYSTEM_PROMPT,
   SYSTEM_PROMPT,
   buildExplanationContext,
+  backfillSummaryLibraryTitle,
   chunkSegments,
   defaultRecommendationCacheKey,
   defaultRecommendationPromptForLanguage,
@@ -26,6 +29,8 @@ const {
   getCachedOverview,
   intentPointLines,
   matchVideoIntent,
+  libraryTitleFromSummary,
+  normalizeLibraryTitle,
   parseIntentMatchesJson,
   parseDefaultRecommendationsJson,
   parseContextExplanationJson,
@@ -42,6 +47,7 @@ const {
   overviewCacheKey,
   systemPromptForLanguage,
   structurePromptForLanguage,
+  shouldBackfillLibraryTitle,
   overviewPromptForLanguage,
   structurePointLines,
   summarizeVideo,
@@ -75,6 +81,7 @@ test("不同摘要语言使用独立缓存键和提示词", () => {
   assert.match(defaultRecommendationPromptForLanguage("en"), /不要混用其他语言/);
   assert.equal(OVERVIEW_PROMPT_VERSION, 1);
   assert.equal(DEFAULT_RECOMMENDATION_PROMPT_VERSION, 1);
+  assert.equal(LIBRARY_TITLE_PROMPT_VERSION, 1);
 });
 
 const EXPECTED_SYSTEM_PROMPT = `你是视频内容分析助手。用户会给你一段带时间戳的视频字幕。
@@ -98,7 +105,7 @@ const EXPECTED_SYSTEM_PROMPT = `你是视频内容分析助手。用户会给你
 
 无论字幕是什么语言，point 和 detail 都用简体中文。
 只输出一个 JSON 数组，形如 [{"t":870,"point":"…","detail":"…"}]，不要任何多余文字或代码块标记。`;
-const EXPECTED_STRUCTURE_SYSTEM_PROMPT = `你会收到一个视频按时间排序的观点列表（每条：时间秒 + 一句话观点）。请做两件事：
+const EXPECTED_STRUCTURE_SYSTEM_PROMPT = `你会收到一个视频按时间排序的观点列表（每条：时间秒 + 一句话观点）。请做三件事：
 
 1. sections：把这些观点按视频的自然结构分成若干段（通常 3–6 段），每段一个标题。标题 6–14 字，完整短语，不要以连词或助词结尾（如“问题 · 主动代理的挑战”“三个设计目标”）。分段必须按时间顺序、不重叠、覆盖全部观点。
 
@@ -112,8 +119,11 @@ const EXPECTED_STRUCTURE_SYSTEM_PROMPT = `你会收到一个视频按时间排�
    - pointT: 该洞见对应观点的时间戳（秒，整数）
    - why: 用 1-2 句话（50-80字）说明为什么这个观点重要。可以从这些角度：它挑战了什么常识？它解决了什么难题？它提供了什么可迁移的方法论？语气要直接、有力，像在跟朋友解释“你一定要记住这个”。
 
+3. libraryTitle：根据整个观点列表概括这期视频真正在讲什么，生成一个适合在知识库中扫读的内容标题。不要翻译或模仿原视频的点击率文案，不要夸张、反问或写成观看建议。使用简体中文，长度以一行容易扫读为准；中文、日文和韩文通常 12–18 个字符，英文和西班牙文通常 5–10 个词。
+
 只输出 JSON：
 {
+  "libraryTitle": "…",
   "sections": [{"title": "…", "startT": <秒数>}, …],
   "keyInsights": [{"pointT": <秒数>, "why": "…"}, …]
 }
@@ -251,6 +261,9 @@ test("结构化汇总提示词逐字对齐追加指令", () => {
   assert.match(STRUCTURE_SYSTEM_PROMPT, /揭示了问题的本质或深层原因/);
   assert.match(STRUCTURE_SYSTEM_PROMPT, /经过实践验证的反常识结论/);
   assert.match(STRUCTURE_SYSTEM_PROMPT, /2-3 个“核心洞见”/);
+  assert.match(STRUCTURE_SYSTEM_PROMPT, /libraryTitle/);
+  assert.match(STRUCTURE_SYSTEM_PROMPT, /不要翻译或模仿原视频/);
+  assert.match(structurePromptForLanguage("en"), /使用English/);
   assert.doesNotMatch(STRUCTURE_SYSTEM_PROMPT, /suggestedIntents/);
   assert.doesNotMatch(STRUCTURE_SYSTEM_PROMPT, /观看目的/);
   assert.doesNotMatch(STRUCTURE_SYSTEM_PROMPT, /overview|概览/);
@@ -285,6 +298,7 @@ test("解析结构化汇总按 startT 排序去重且保留完整标题", () => 
     ),
     {
       overview: "这期先讲问题，再讲方案。",
+      libraryTitle: "",
       sections: [
         { title: "开场", startT: 0 },
         { title: "第二部分的标题非常非常长", startT: 120 },
@@ -298,6 +312,7 @@ test("解析结构化汇总按 startT 排序去重且保留完整标题", () => 
     parseStructureJson('{"sections":[{"title":"开场","startT":0}]}'),
     {
       overview: "",
+      libraryTitle: "",
       sections: [{ title: "开场", startT: 0 }],
       keyInsights: [],
       suggestedIntents: [],
@@ -312,6 +327,179 @@ test("解析概览 JSON，拒绝空内容并容忍模型前后说明", () => {
   );
   assert.throws(() => parseOverviewJson("[]"), /概览内容为空/);
   assert.throws(() => parseOverviewJson("not-json"), /概览不是有效 JSON/);
+});
+
+test("洞见库标题安全归一化，缺失时不影响结构解析", () => {
+  const longTitle = `  用   设计系统 ${"😀".repeat(130)}  `;
+  const parsed = parseStructureJson(
+    JSON.stringify({
+      libraryTitle: longTitle,
+      sections: [{ title: "全文", startT: 0 }],
+    }),
+  );
+  assert.equal([...parsed.libraryTitle].length, 120);
+  assert.match(parsed.libraryTitle, /^用 设计系统/);
+  assert.equal(
+    normalizeLibraryTitle("  为什么\n评估会成为  AI 产品核心  "),
+    "为什么 评估会成为 AI 产品核心",
+  );
+});
+
+test("旧摘要只回填洞见库标题，不覆盖原分区", async () => {
+  const summary = {
+    videoId: "library-title-video",
+    targetLanguage: "zh-CN",
+    schemaVersion: SUMMARY_SCHEMA_VERSION,
+    promptVersion: SUMMARY_PROMPT_VERSION,
+    generatedAt: 100,
+    overview: "原概览",
+    sections: [{ title: "原分区", startT: 0 }],
+    points: [{ t: 0, point: "设计系统统一网页", detail: "详情" }],
+  };
+  const key = summaryCacheKey(summary.videoId, summary.targetLanguage);
+  const storage = memoryStorage({ [key]: summary });
+  const result = await backfillSummaryLibraryTitle(summary, {
+    apiKey: "test-key",
+    storage,
+    now: () => 1000,
+    fetchImpl: async () =>
+      streamResponse([
+        'data: {"choices":[{"delta":{"content":"{\\"libraryTitle\\":\\"用设计系统统一 AI 网页\\",\\"sections\\":[{\\"title\\":\\"新分区\\",\\"startT\\":0}]}"}}]}\n\n',
+        "data: [DONE]\n\n",
+      ]),
+  });
+  assert.equal(result.summary.libraryTitle, "用设计系统统一 AI 网页");
+  assert.equal(result.summary.libraryTitleStatus, "complete");
+  assert.deepEqual(result.summary.sections, summary.sections);
+  assert.equal(result.summary.overview, "原概览");
+  assert.equal(libraryTitleFromSummary(result.summary), result.summary.libraryTitle);
+  assert.equal(shouldBackfillLibraryTitle(result.summary, 1001), false);
+  assert.deepEqual(storage.data[key].sections, summary.sections);
+});
+
+test("标题回填失败后按独立版本退避，不抛错阻断摘要", async () => {
+  const summary = {
+    videoId: "library-title-retry",
+    targetLanguage: "en",
+    schemaVersion: SUMMARY_SCHEMA_VERSION,
+    promptVersion: SUMMARY_PROMPT_VERSION,
+    points: [{ t: 0, point: "Evaluation is a core skill", detail: "" }],
+  };
+  const key = summaryCacheKey(summary.videoId, summary.targetLanguage);
+  const storage = memoryStorage({ [key]: summary });
+  const result = await backfillSummaryLibraryTitle(summary, {
+    apiKey: "test-key",
+    storage,
+    now: () => 5000,
+    fetchImpl: async () => streamResponse([], 500),
+  });
+  assert.equal(result.summary.libraryTitleStatus, "failed");
+  assert.equal(result.summary.libraryTitlePromptVersion, LIBRARY_TITLE_PROMPT_VERSION);
+  assert.equal(libraryTitleFromSummary(result.summary), "");
+  assert.equal(shouldBackfillLibraryTitle(result.summary, 5001), false);
+  assert.equal(
+    shouldBackfillLibraryTitle(result.summary, 5000 + LIBRARY_TITLE_RETRY_MS + 1),
+    true,
+  );
+  assert.equal(storage.data[key].libraryTitleAttemptedAt, 5000);
+});
+
+test("回填期间 summary 已换代时不用旧观点覆盖新结果", async () => {
+  const summary = {
+    videoId: "library-title-race",
+    targetLanguage: "zh-CN",
+    schemaVersion: SUMMARY_SCHEMA_VERSION,
+    promptVersion: SUMMARY_PROMPT_VERSION,
+    generatedAt: 100,
+    points: [{ t: 0, point: "旧观点", detail: "" }],
+  };
+  const key = summaryCacheKey(summary.videoId, summary.targetLanguage);
+  const storage = memoryStorage({ [key]: summary });
+  const replacement = {
+    ...summary,
+    generatedAt: 200,
+    points: [{ t: 0, point: "新观点", detail: "" }],
+    libraryTitle: "新摘要已有的洞见库标题",
+    libraryTitlePromptVersion: LIBRARY_TITLE_PROMPT_VERSION,
+    libraryTitleStatus: "complete",
+    libraryTitleGeneratedAt: 200,
+  };
+  const result = await backfillSummaryLibraryTitle(summary, {
+    apiKey: "test-key",
+    storage,
+    now: () => 300,
+    fetchImpl: async () => {
+      storage.data[key] = replacement;
+      return streamResponse([
+        'data: {"choices":[{"delta":{"content":"{\\"libraryTitle\\":\\"旧观点生成的错误标题\\",\\"sections\\":[{\\"title\\":\\"旧分区\\",\\"startT\\":0}]}"}}]}\n\n',
+        "data: [DONE]\n\n",
+      ]);
+    },
+  });
+  assert.equal(result.updated, false);
+  assert.equal(result.summary.generatedAt, 200);
+  assert.equal(storage.data[key].libraryTitle, replacement.libraryTitle);
+});
+
+test("标题回填与概览补写并发时互不覆盖 summary 元数据", async () => {
+  const summary = {
+    videoId: "library-title-overview-race",
+    targetLanguage: "zh-CN",
+    schemaVersion: SUMMARY_SCHEMA_VERSION,
+    promptVersion: SUMMARY_PROMPT_VERSION,
+    generatedAt: 100,
+    overview: "",
+    sections: [{ title: "原分区", startT: 0 }],
+    points: [{ t: 0, point: "并发更新也要保留字段", detail: "详情" }],
+  };
+  const key = summaryCacheKey(summary.videoId, summary.targetLanguage);
+  const data = { [key]: summary };
+  const storage = {
+    data,
+    get(storageKey, callback) {
+      const snapshot = data[storageKey];
+      setTimeout(() => callback({ [storageKey]: snapshot }), 0);
+    },
+    set(values, callback) {
+      setTimeout(() => {
+        Object.assign(data, values);
+        callback();
+      }, 5);
+    },
+  };
+
+  await Promise.all([
+    backfillSummaryLibraryTitle(summary, {
+      apiKey: "test-key",
+      storage,
+      now: () => 1000,
+      fetchImpl: async () =>
+        streamResponse([
+          'data: {"choices":[{"delta":{"content":"{\\"libraryTitle\\":\\"并发安全的洞见库标题\\",\\"sections\\":[{\\"title\\":\\"新分区\\",\\"startT\\":0}]}"}}]}\n\n',
+          "data: [DONE]\n\n",
+        ]),
+    }),
+    generateOverview(
+      {
+        videoId: summary.videoId,
+        targetLanguage: summary.targetLanguage,
+        segments: [{ tMs: 0, text: "完整字幕" }],
+      },
+      {
+        apiKey: "test-key",
+        storage,
+        fetchImpl: async () =>
+          streamResponse([
+            'data: {"choices":[{"delta":{"content":"{\\"overview\\":\\"并发安全的概览。\\"}"}}]}\n\n',
+            "data: [DONE]\n\n",
+          ]),
+      },
+    ),
+  ]);
+
+  assert.equal(data[key].libraryTitle, "并发安全的洞见库标题");
+  assert.equal(data[key].overview, "并发安全的概览。");
+  assert.deepEqual(data[key].sections, summary.sections);
 });
 
 test("parseStructureJson - with keyInsights", () => {
@@ -363,6 +551,7 @@ test("结构化汇总带前后说明文字时仍能提取 JSON 对象", () => {
   );
   assert.deepEqual(result, {
     overview: "先讲问题，再讲方案。",
+    libraryTitle: "",
     sections: [{ title: "问题", startT: 10 }],
     keyInsights: [{ pointT: 10, why: "它揭示了问题本质。" }],
     suggestedIntents: [],
@@ -925,7 +1114,7 @@ test("F2 结构化汇总只在全部观点块完成后开始", async () => {
           ]);
         }
         return streamResponse([
-          'data: {"choices":[{"delta":{"content":"{\\"sections\\":[{\\"title\\":\\"第一部分\\",\\"startT\\":10},{\\"title\\":\\"第二部分\\",\\"startT\\":710}],\\"keyInsights\\":[{\\"pointT\\":710,\\"why\\":\\"第二点揭示了问题的深层原因。\\"}]}"} } ]}\n\n',
+          'data: {"choices":[{"delta":{"content":"{\\"libraryTitle\\":\\"两个观点如何构成完整方法\\",\\"sections\\":[{\\"title\\":\\"第一部分\\",\\"startT\\":10},{\\"title\\":\\"第二部分\\",\\"startT\\":710}],\\"keyInsights\\":[{\\"pointT\\":710,\\"why\\":\\"第二点揭示了问题的深层原因。\\"}]}"} } ]}\n\n',
           "data: [DONE]\n\n",
         ]);
       },
@@ -934,6 +1123,8 @@ test("F2 结构化汇总只在全部观点块完成后开始", async () => {
   assert.deepEqual(events, ["chunk:0", "chunk:1", "structure:2"]);
   assert.equal(result.summary.points.length, 2);
   assert.equal(result.summary.overview, "");
+  assert.equal(result.summary.libraryTitle, "两个观点如何构成完整方法");
+  assert.equal(result.summary.libraryTitleStatus, "complete");
   assert.deepEqual(result.summary.keyInsights, [
     { pointT: 710, why: "第二点揭示了问题的深层原因。" },
   ]);
@@ -1289,4 +1480,139 @@ test("超时覆盖完整 SSE 读取过程", async () => {
       }),
     /请求超时/,
   );
+});
+
+test("答卷输入按问句、任务动词、关键词和歧义短语三态分流", () => {
+  assert.equal(YouTubeSummary.classifyIntent("MCP"), "keyword");
+  assert.equal(
+    YouTubeSummary.classifyIntent("为什么评测要避免循环工程？"),
+    "answer",
+  );
+  assert.equal(
+    YouTubeSummary.classifyIntent("帮我整理一下操作步骤"),
+    "answer",
+  );
+  assert.equal(
+    YouTubeSummary.classifyIntent("MCP 与 skills 的职责边界划分"),
+    "ambiguous",
+  );
+  assert.equal(
+    YouTubeSummary.classifyIntent("Explain the tradeoffs"),
+    "answer",
+  );
+});
+
+test("答卷上下文受硬预算约束且合法时间戳只来自真正进入上下文的观点", () => {
+  const points = Array.from({ length: 80 }, (_, index) => ({
+    t: index * 10,
+    point: `观点 ${index} ${"很长的内容".repeat(20)}`,
+    detail: `详情 ${index} ${"补充说明".repeat(100)}`,
+  }));
+  const context = YouTubeSummary.buildAnswerSummaryContext(
+    {
+      overview: "总览".repeat(1000),
+      sections: Array.from({ length: 30 }, (_, index) => ({
+        startT: index * 20,
+        title: `章节 ${index} ${"标题".repeat(100)}`,
+      })),
+      points,
+    },
+    "哪些观点最重要？",
+    { maxChars: 2400 },
+  );
+  assert.ok([...context.text].length <= 2400);
+  assert.ok(context.validTs.length > 0);
+  for (const timestamp of context.validTs) {
+    assert.match(context.text, new RegExp(`\\[${timestamp}\\]`));
+  }
+  const changed = YouTubeSummary.buildAnswerSummaryContext(
+    {
+      overview: "总览".repeat(1000),
+      sections: [{ startT: 0, title: "已改写的章节标题" }],
+      points,
+    },
+    "哪些观点最重要？",
+    { maxChars: 2400 },
+  );
+  assert.notEqual(context.summaryFingerprint, changed.summaryFingerprint);
+});
+
+test("答卷解析精确校验观点时间，不吸附近似值并允许零步骤", () => {
+  const parsed = YouTubeSummary.parseAnswerJson(
+    JSON.stringify({
+      action: "answer",
+      scope: "in_scope",
+      directAnswer: "结论",
+      evidenceTs: [10, 11, 10],
+      steps: [],
+      uncertain: false,
+      notice: "",
+    }),
+    [10, 20],
+  );
+  assert.deepEqual(parsed.evidenceTs, [10]);
+  assert.deepEqual(parsed.steps, []);
+  assert.throws(
+    () =>
+      YouTubeSummary.parseAnswerJson(
+        JSON.stringify({
+          action: "answer",
+          scope: "in_scope",
+          directAnswer: "结论",
+          evidenceTs: [11],
+          steps: [],
+        }),
+        [10, 20],
+      ),
+    /没有合法时间依据/,
+  );
+});
+
+test("追问字幕升级必须携带可用 fallback，新问题忽略夹带答案", () => {
+  const upgrade = YouTubeSummary.parseAnswerJson(
+    JSON.stringify({
+      action: "need_captions",
+      scope: "in_scope",
+      fallbackAnswer: {
+        directAnswer: "摘要能支持的回答",
+        evidenceTs: [20],
+        steps: [],
+        uncertain: false,
+      },
+      retrieval: { query: "评测", anchorTs: [20, 21] },
+    }),
+    [10, 20],
+    { allowNeedCaptions: true },
+  );
+  assert.equal(upgrade.fallbackAnswer.uncertain, true);
+  assert.deepEqual(upgrade.retrieval.anchorTs, [20]);
+  const newQuestion = YouTubeSummary.parseAnswerJson(
+    JSON.stringify({
+      action: "answer",
+      scope: "new_question",
+      directAnswer: "不应采用",
+      evidenceTs: [10],
+      notice: "请重新提问",
+    }),
+    [10],
+    { allowNewQuestion: true },
+  );
+  assert.equal(newQuestion.scope, "new_question");
+  assert.equal("directAnswer" in newQuestion, false);
+});
+
+test("字幕窗支持多锚点与关键词召回并遵守字符上限", () => {
+  const result = YouTubeSummary.buildAnswerCaptionWindow(
+    [
+      { tMs: 10000, text: "第一个锚点附近" },
+      { tMs: 200000, text: "关键词循环工程出现在远处" },
+      { tMs: 300000, text: "第二个锚点附近" },
+    ],
+    { query: "循环工程", anchorTs: [10, 300] },
+    { windowMs: 1000, maxChars: 500 },
+  );
+  assert.match(result.text, /第一个锚点附近/);
+  assert.match(result.text, /第二个锚点附近/);
+  assert.match(result.text, /关键词循环工程/);
+  assert.ok([...result.text].length <= 500);
 });

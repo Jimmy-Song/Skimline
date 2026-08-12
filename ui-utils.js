@@ -61,6 +61,17 @@
     return `${String(videoId || "")}:${timestamp}`;
   }
 
+  function reconcileRowOrder(container, rows) {
+    let cursor = container.firstChild;
+    for (const row of rows) {
+      if (row === cursor) {
+        cursor = row.nextSibling;
+        continue;
+      }
+      container.insertBefore(row, cursor);
+    }
+  }
+
   function findReadingAnchorRow(
     rows,
     expandedRow,
@@ -403,6 +414,7 @@
     pointStableKey,
     rankPointsByQuery,
     reconcileLibraryExpansion,
+    reconcileRowOrder,
     seekVideo,
     transitionLibrarySearchExpansion,
   };

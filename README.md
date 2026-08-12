@@ -10,8 +10,8 @@ Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中
 
 如果你只想安装扩展：
 
-1. 下载 `releases/skimline-0.4.3-extension.zip`。
-2. 解压 ZIP，并进入其中的 `skimline-0.4.3` 目录。
+1. 下载 `releases/skimline-0.5.0-extension.zip`。
+2. 解压 ZIP，并进入其中的 `skimline-0.5.0` 目录。
 3. 打开 Chrome，在地址栏输入 `chrome://extensions`。
 4. 打开右上角“开发者模式”。
 5. 点击“加载已解压的扩展程序”，选择解压后的项目目录。
@@ -76,7 +76,7 @@ npm run build:release
 ```bash
 npm test
 npm run build:release
-unzip -t releases/skimline-0.4.3-extension.zip
+unzip -t releases/skimline-0.5.0-extension.zip
 git ls-files -z | xargs -0 rg -n "(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer [A-Za-z0-9._-]{20,})" -S
 ```
 
