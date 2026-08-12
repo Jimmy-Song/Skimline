@@ -19,6 +19,7 @@ const explanationTasks = new Map();
 const explanationTaskFingerprints = new Map();
 const queuedExplanationTaskIds = [];
 const explanationTaskControllers = new Map();
+const libraryTitleJobs = new Map();
 let explanationTasksRestorePromise = null;
 let clippingMutationQueue = Promise.resolve();
 
@@ -65,16 +66,125 @@ function listClippingsFromStore(store) {
   return SkimlineCollections.listClippings([store]);
 }
 
+function summaryLibraryTitleEntry(summary) {
+  const title = YouTubeSummary.libraryTitleFromSummary(summary);
+  const videoId = String(summary?.videoId || "");
+  const targetLanguage = String(summary?.targetLanguage || "").trim();
+  if (!title || !videoId || !targetLanguage) return null;
+  return SkimlineCollections.normalizeVideoTitleEntry({
+    videoId,
+    targetLanguage,
+    title,
+    promptVersion: summary.libraryTitlePromptVersion,
+    generatedAt: summary.libraryTitleGeneratedAt,
+  });
+}
+
+function isCurrentCachedSummary(summary, videoId, targetLanguage) {
+  return Boolean(
+    summary?.videoId === videoId &&
+      YouTubeSummary.normalizeSummaryLanguage(summary?.targetLanguage) ===
+        targetLanguage &&
+      summary?.schemaVersion === YouTubeSummary.SUMMARY_SCHEMA_VERSION &&
+      summary?.promptVersion === YouTubeSummary.SUMMARY_PROMPT_VERSION,
+  );
+}
+
+async function readCachedLibraryTitleEntry(videoId, rawTargetLanguage) {
+  const requestedLanguage = String(rawTargetLanguage || "").trim();
+  if (!videoId || !requestedLanguage) return null;
+  const targetLanguage = YouTubeSummary.normalizeSummaryLanguage(
+    requestedLanguage,
+  );
+  const key = YouTubeSummary.summaryCacheKey(videoId, targetLanguage);
+  const summary = (await chrome.storage.local.get(key))[key];
+  return isCurrentCachedSummary(summary, videoId, targetLanguage)
+    ? summaryLibraryTitleEntry(summary)
+    : null;
+}
+
+function storeHasVideoClipping(store, videoId) {
+  return listClippingsFromStore(store).some(
+    (item) => item.videoId === videoId,
+  );
+}
+
+async function persistSummaryLibraryTitleIfCollected(summary) {
+  const entry = summaryLibraryTitleEntry(summary);
+  if (!entry) return false;
+  return queueClippingMutation(async (store) => {
+    if (!storeHasVideoClipping(store, entry.videoId)) return false;
+    const result = SkimlineCollections.upsertVideoTitle(store, entry);
+    if (result.changed) await persistClippingsStore(result.store);
+    return result.changed;
+  });
+}
+
+function ensureCachedLibraryTitle(videoId, rawTargetLanguage) {
+  const requestedLanguage = String(rawTargetLanguage || "").trim();
+  if (!videoId || !requestedLanguage) return Promise.resolve(null);
+  const targetLanguage = YouTubeSummary.normalizeSummaryLanguage(
+    requestedLanguage,
+  );
+  const key = YouTubeSummary.summaryCacheKey(videoId, targetLanguage);
+  const existing = libraryTitleJobs.get(key);
+  if (existing) return existing;
+
+  const job = (async () => {
+    const summary = (await chrome.storage.local.get(key))[key];
+    if (!isCurrentCachedSummary(summary, videoId, targetLanguage)) return null;
+    let resolved = summary;
+    if (YouTubeSummary.shouldBackfillLibraryTitle(summary)) {
+      const { deepseek_api_key: apiKey } = await chrome.storage.local.get(
+        "deepseek_api_key",
+      );
+      if (apiKey) {
+        const result = await YouTubeSummary.backfillSummaryLibraryTitle(summary, {
+          apiKey,
+          baseUrl: DEFAULT_BASE_URL,
+          storage: chrome.storage.local,
+        });
+        resolved = result.summary;
+      }
+    }
+    await persistSummaryLibraryTitleIfCollected(resolved).catch(() => false);
+    return resolved;
+  })().finally(() => libraryTitleJobs.delete(key));
+  libraryTitleJobs.set(key, job);
+  return job;
+}
+
 function saveClipping(input) {
   return queueClippingMutation(async (store) => {
     const clipping = SkimlineCollections.createClipping(input);
     const result = SkimlineCollections.addClipping(store, clipping);
-    if (!result.duplicate) await persistClippingsStore(result.store);
+    let nextStore = result.store;
+    let videoTitleChanged = false;
+    const titleEntry = await readCachedLibraryTitleEntry(
+      clipping.videoId,
+      clipping.targetLanguage,
+    );
+    if (titleEntry && storeHasVideoClipping(nextStore, clipping.videoId)) {
+      const titleResult = SkimlineCollections.upsertVideoTitle(
+        nextStore,
+        titleEntry,
+      );
+      nextStore = titleResult.store;
+      videoTitleChanged = titleResult.changed;
+    }
+    const changed = !result.duplicate || videoTitleChanged;
+    if (changed) {
+      nextStore = SkimlineCollections.normalizeReplicaState({
+        ...nextStore,
+        revision: store.revision + 1,
+      });
+      await persistClippingsStore(nextStore);
+    }
     return {
       item: result.item,
       duplicate: result.duplicate,
-      count: listClippingsFromStore(result.store).length,
-      revision: result.store.revision,
+      count: listClippingsFromStore(nextStore).length,
+      revision: nextStore.revision,
     };
   });
 }
@@ -1059,6 +1169,8 @@ async function runTask(task) {
       },
     );
     if (task.cancelled) return;
+    await persistSummaryLibraryTitleIfCollected(result.summary).catch(() => false);
+    if (task.cancelled) return;
     mapSucceeded = true;
     task.status = "complete";
     task.resolve?.(result);
@@ -1490,6 +1602,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         sendResponse({
           ok: true,
           items: listClippingsFromStore(store),
+          videoTitles: store.videoTitles,
           revision: store.revision,
         }),
       )
@@ -1575,6 +1688,21 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           summary?.promptVersion === YouTubeSummary.SUMMARY_PROMPT_VERSION ? summary : null,
       });
     }).catch((error) => sendResponse({ ok: false, error: error?.message || "读取缓存失败" }));
+    return true;
+  }
+
+  if (message?.type === "ENSURE_LIBRARY_TITLE") {
+    ensureCachedLibraryTitle(
+      String(message.videoId || ""),
+      message.targetLanguage,
+    )
+      .then((summary) => sendResponse({ ok: true, summary }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "回填洞见库标题失败",
+        }),
+      );
     return true;
   }
 

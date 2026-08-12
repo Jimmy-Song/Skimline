@@ -37,6 +37,7 @@
     tabId: null,
     videoId: "",
     videoTitle: "",
+    libraryTitle: "",
     loaded: false,
     loading: false,
     preparing: false,
@@ -107,6 +108,7 @@
     activeView: "summary",
     summaryScrollTop: 0,
     clippings: [],
+    videoTitles: [],
     clippingsRevision: 0,
     libraryRequestId: 0,
     libraryError: "",
@@ -277,6 +279,13 @@
   function resolveTargetLanguage(setting = state.languageSetting) {
     const requested = setting === "auto" ? navigator.language : setting;
     return normalizeTargetLanguage(requested);
+  }
+
+  function cleanVideoTitle(value) {
+    return String(value || "")
+      .replace(/\s*-\s*YouTube\s*$/i, "")
+      .replace(/^\s*[\(（]\d+[\)）]\s*/, "")
+      .trim();
   }
 
   function normalizeTextScale(value) {
@@ -812,6 +821,10 @@
     return SkimlineCollections.groupClippingsByVideo(
       state.clippings,
       rawQuery,
+      {
+        videoTitles: state.videoTitles,
+        targetLanguage: state.targetLanguage,
+      },
     );
   }
 
@@ -945,25 +958,58 @@
     );
     count.setAttribute("aria-hidden", "true");
     const copy = makeElement("span", "yvpm-video-group-copy");
+    const normalizedLibraryTitle = SkimlineCollections.normalizeClippingText(
+      group.libraryTitle,
+    );
+    const normalizedOriginTitle = SkimlineCollections.normalizeClippingText(
+      group.videoTitle,
+    );
+    const hasDistinctLibraryTitle = Boolean(
+      normalizedLibraryTitle &&
+        normalizedLibraryTitle.normalize("NFKC").toLocaleLowerCase() !==
+          normalizedOriginTitle.normalize("NFKC").toLocaleLowerCase(),
+    );
+    const displayTitle = hasDistinctLibraryTitle
+      ? normalizedLibraryTitle
+      : normalizedOriginTitle;
+    copy.classList.toggle(
+      "yvpm-video-group-copy-localized",
+      hasDistinctLibraryTitle,
+    );
     const title = makeElement(
       "span",
       "yvpm-video-group-title",
-      group.videoTitle,
+      displayTitle,
+    );
+    title.classList.toggle(
+      "yvpm-video-group-title-localized",
+      hasDistinctLibraryTitle,
     );
     const metaCopy =
       currentLibraryQuery() && group.visibleCount < group.totalCount
         ? `匹配 ${group.visibleCount} 条 · 共 ${group.totalCount} 条收藏`
         : `${group.totalCount} 条收藏 · 最近收藏于${YouTubeSummary.formatLibraryDate(group.latestSavedAt)}`;
     const meta = makeElement("span", "yvpm-video-group-meta", metaCopy);
-    copy.append(title, meta);
+    copy.append(title);
+    if (hasDistinctLibraryTitle) {
+      const origin = makeElement(
+        "span",
+        "yvpm-video-group-origin",
+        normalizedOriginTitle,
+      );
+      origin.setAttribute("aria-hidden", "true");
+      copy.append(origin);
+    }
+    copy.append(meta);
     const chevron = makeElement("span", "yvpm-video-group-chevron", "⌄");
     chevron.setAttribute("aria-hidden", "true");
     toggle.append(count, copy, chevron);
+    toggle.setAttribute("aria-label", `${displayTitle}，${metaCopy}`);
 
     const body = makeElement("div", "yvpm-video-group-body");
     body.id = videoGroupDomId(group.videoId);
     body.setAttribute("role", "list");
-    body.setAttribute("aria-label", `${group.videoTitle}的收藏`);
+    body.setAttribute("aria-label", `${displayTitle}的收藏`);
     body.hidden = !expanded;
     if (expanded) populateVideoGroupBody(body, group);
 
@@ -1054,6 +1100,9 @@
         return false;
       }
       state.clippings = SkimlineCollections.buildClippingsView(response.items);
+      state.videoTitles = SkimlineCollections.normalizeVideoTitles(
+        response.videoTitles,
+      );
       state.clippingsRevision = Math.max(0, Number(response.revision) || 0);
       state.libraryError = "";
       reconcileLibraryExpansionState();
@@ -3003,6 +3052,7 @@
   function renderSummary(summary, { anchor = null } = {}) {
     const hadPoints = state.points.length > 0;
     clearPoints({ preserveOverview: true });
+    state.libraryTitle = YouTubeSummary.libraryTitleFromSummary(summary);
     const points = YouTubeSummary.dedupePointsByTimestamp(summary?.points);
     const groups = YouTubeSummary.groupPointsBySections(
       points,
@@ -3115,6 +3165,11 @@
     restoreReadingAnchor(anchor, restoredRow);
     applyPendingPlaybackRestore();
     state.finalizedGenerationId = finalizationKey;
+    void ensureLibraryTitleForSummary(
+      state.videoId,
+      state.targetLanguage,
+      state.epoch,
+    );
     return true;
   }
 
@@ -3171,7 +3226,7 @@
       state.videoId === nextVideoId &&
       (state.loading || state.loaded || state.preparing)
     ) {
-      if (videoTitle) state.videoTitle = videoTitle;
+      if (videoTitle) state.videoTitle = cleanVideoTitle(videoTitle);
       state.currentTime = YouTubeSummary.playbackTimeOr(
         currentTime,
         state.currentTime,
@@ -3191,8 +3246,9 @@
     state.tabId = nextTabId;
     state.videoId = nextVideoId;
     state.videoTitle = nextVideoId
-      ? String(videoTitle || "").trim() || `YouTube 视频 ${nextVideoId}`
+      ? cleanVideoTitle(videoTitle) || `YouTube 视频 ${nextVideoId}`
       : "";
+    state.libraryTitle = "";
     state.loaded = false;
     state.loading = false;
     state.preparing = false;
@@ -3402,6 +3458,33 @@
     }
   }
 
+  async function ensureLibraryTitleForSummary(
+    videoId,
+    targetLanguage,
+    epoch,
+  ) {
+    try {
+      const response = await runtimeMessage({
+        type: "ENSURE_LIBRARY_TITLE",
+        videoId,
+        targetLanguage,
+      });
+      if (
+        !response?.ok ||
+        state.videoId !== videoId ||
+        state.targetLanguage !== targetLanguage ||
+        state.epoch !== epoch
+      ) {
+        return;
+      }
+      state.libraryTitle = YouTubeSummary.libraryTitleFromSummary(
+        response.summary,
+      );
+    } catch {
+      // 标题是洞见库增强字段，回填失败不影响现有摘要。
+    }
+  }
+
   async function loadSummary({ immediate = false } = {}) {
     const videoId = state.videoId;
     const epoch = state.epoch;
@@ -3436,6 +3519,7 @@
         state.loaded = true;
         hideProgress();
         setStatus("");
+        void ensureLibraryTitleForSummary(videoId, targetLanguage, epoch);
         return;
       }
 
@@ -3511,9 +3595,7 @@
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
     if (syncId !== state.activeTabSyncId) return;
     const nextTabId = Number.isInteger(tab?.id) ? tab.id : null;
-    const nextVideoTitle = String(tab?.title || "")
-      .replace(/\s*-\s*YouTube\s*$/i, "")
-      .trim();
+    const nextVideoTitle = cleanVideoTitle(tab?.title);
     if (!nextTabId) {
       switchToVideo({ tabId: null });
       return;
@@ -3688,9 +3770,7 @@
   chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
     if (tabId !== state.tabId) return;
     if (changeInfo.title) {
-      state.videoTitle = String(changeInfo.title)
-        .replace(/\s*-\s*YouTube\s*$/i, "")
-        .trim();
+      state.videoTitle = cleanVideoTitle(changeInfo.title);
     }
     if (changeInfo.url) {
       const videoId = YouTubeSummary.getVideoId(changeInfo.url);
@@ -3822,6 +3902,7 @@
       closeExplanation({ dismiss: false, clearTask: true });
       state.languageSetting = nextSetting;
       updateLanguageControl();
+      if (state.activeView === "library") renderLibrary();
       await chrome.storage.local.set({
         [LANGUAGE_SETTING_KEY]: state.languageSetting,
       });
@@ -3837,6 +3918,7 @@
         tabId: state.tabId,
       }).catch(() => null);
       state.epoch += 1;
+      state.libraryTitle = "";
       state.loaded = false;
       state.loading = false;
       state.activeGenerationId = "";
@@ -3909,6 +3991,7 @@
       changes[SkimlineCollections.CLIPPINGS_STORAGE_KEY].newValue,
     );
     state.clippings = SkimlineCollections.listClippings([store]);
+    state.videoTitles = store.videoTitles;
     state.clippingsRevision = store.revision;
     state.libraryError = "";
     reconcileLibraryExpansionState();

@@ -174,13 +174,18 @@
     return pending;
   }
 
+  function cleanVideoTitle(value) {
+    return String(value || "")
+      .replace(/\s*-\s*YouTube\s*$/i, "")
+      .replace(/^\s*[\(（]\d+[\)）]\s*/, "")
+      .trim();
+  }
+
   function getVideoState() {
     const video = document.querySelector("video");
     rememberContentPlayback(video);
     const videoId = YouTubeSummary.getVideoId();
-    const videoTitle = String(document.title || "")
-      .replace(/\s*-\s*YouTube\s*$/i, "")
-      .trim();
+    const videoTitle = cleanVideoTitle(document.title);
     return {
       videoId,
       duration: state.lastContentDuration,
@@ -218,9 +223,7 @@
       state.videoId = nextVideoId;
       state.lastContentPlaybackTime = 0;
       state.lastContentDuration = 0;
-      const videoTitle = String(document.title || "")
-        .replace(/\s*-\s*YouTube\s*$/i, "")
-        .trim();
+      const videoTitle = cleanVideoTitle(document.title);
       notify({ type: "VIDEO_CHANGED", videoId: nextVideoId, videoTitle });
     }
     ensureVideoListener();

@@ -3,9 +3,12 @@
 
   const SUMMARY_PROMPT_VERSION = 9;
   const SUMMARY_SCHEMA_VERSION = 6;
+  const LIBRARY_TITLE_PROMPT_VERSION = 1;
+  const LIBRARY_TITLE_RETRY_MS = 6 * 60 * 60 * 1000;
   const OVERVIEW_PROMPT_VERSION = 1;
   const INTENT_MATCH_PROMPT_VERSION = 1;
   const DEFAULT_RECOMMENDATION_PROMPT_VERSION = 1;
+  const summaryMetadataMutationQueues = new Map();
   const CONTEXT_EXPLANATION_PROMPT_VERSION = 1;
   const MAX_EXPLANATION_SELECTION_CHARS = 200;
   const DEFAULT_SUMMARY_LANGUAGE = "zh-CN";
@@ -46,7 +49,7 @@
 - 忠实覆盖整期视频，不加入字幕里没有的内容；
 - 延续自然、清楚、克制的表达，不写标题、列表、观看建议或价值评分；
 - 只输出 JSON：{"overview":"…"}，不要任何多余文字或代码块标记。`;
-  const STRUCTURE_SYSTEM_PROMPT = `你会收到一个视频按时间排序的观点列表（每条：时间秒 + 一句话观点）。请做两件事：
+  const STRUCTURE_SYSTEM_PROMPT = `你会收到一个视频按时间排序的观点列表（每条：时间秒 + 一句话观点）。请做三件事：
 
 1. sections：把这些观点按视频的自然结构分成若干段（通常 3–6 段），每段一个标题。标题 6–14 字，完整短语，不要以连词或助词结尾（如“问题 · 主动代理的挑战”“三个设计目标”）。分段必须按时间顺序、不重叠、覆盖全部观点。
 
@@ -60,8 +63,11 @@
    - pointT: 该洞见对应观点的时间戳（秒，整数）
    - why: 用 1-2 句话（50-80字）说明为什么这个观点重要。可以从这些角度：它挑战了什么常识？它解决了什么难题？它提供了什么可迁移的方法论？语气要直接、有力，像在跟朋友解释“你一定要记住这个”。
 
+3. libraryTitle：根据整个观点列表概括这期视频真正在讲什么，生成一个适合在知识库中扫读的内容标题。不要翻译或模仿原视频的点击率文案，不要夸张、反问或写成观看建议。使用简体中文，长度以一行容易扫读为准；中文、日文和韩文通常 12–18 个字符，英文和西班牙文通常 5–10 个词。
+
 只输出 JSON：
 {
+  "libraryTitle": "…",
   "sections": [{"title": "…", "startT": <秒数>}, …],
   "keyInsights": [{"pointT": <秒数>, "why": "…"}, …]
 }
@@ -415,6 +421,7 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     }
     const overview =
       typeof parsed?.overview === "string" ? parsed.overview.trim() : "";
+    const libraryTitle = normalizeLibraryTitle(parsed?.libraryTitle);
     if (!Array.isArray(parsed?.sections)) {
       throw new Error("结构化汇总缺少分区");
     }
@@ -472,7 +479,13 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
         return true;
       })
       .slice(0, 3);
-    return { overview, sections, keyInsights, suggestedIntents };
+    return { overview, libraryTitle, sections, keyInsights, suggestedIntents };
+  }
+
+  function normalizeLibraryTitle(value) {
+    return [...String(value || "").replace(/\s+/g, " ").trim()]
+      .slice(0, 120)
+      .join("");
   }
 
   function intentPointLines(points) {
@@ -1313,6 +1326,17 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     });
   }
 
+  function queueSummaryMetadataMutation(key, operation) {
+    const previous = summaryMetadataMutationQueues.get(key) || Promise.resolve();
+    const pending = previous.catch(() => undefined).then(operation);
+    summaryMetadataMutationQueues.set(key, pending);
+    return pending.finally(() => {
+      if (summaryMetadataMutationQueues.get(key) === pending) {
+        summaryMetadataMutationQueues.delete(key);
+      }
+    });
+  }
+
   function isCurrentSummary(summary, videoId, targetLanguage) {
     return Boolean(
       summary?.videoId === videoId &&
@@ -1320,6 +1344,89 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
         summary?.promptVersion === SUMMARY_PROMPT_VERSION &&
         normalizeSummaryLanguage(summary?.targetLanguage) === targetLanguage,
     );
+  }
+
+  function libraryTitleFromSummary(summary) {
+    if (
+      summary?.libraryTitleStatus !== "complete" ||
+      Number(summary?.libraryTitlePromptVersion) !==
+        LIBRARY_TITLE_PROMPT_VERSION
+    ) {
+      return "";
+    }
+    return normalizeLibraryTitle(summary?.libraryTitle);
+  }
+
+  function shouldBackfillLibraryTitle(summary, now = Date.now()) {
+    if (libraryTitleFromSummary(summary)) return false;
+    if (!Array.isArray(summary?.points) || !summary.points.length) return false;
+    const attemptedAt = Math.max(
+      0,
+      Math.floor(Number(summary?.libraryTitleAttemptedAt) || 0),
+    );
+    return !(
+      summary?.libraryTitleStatus === "failed" &&
+      Number(summary?.libraryTitlePromptVersion) ===
+        LIBRARY_TITLE_PROMPT_VERSION &&
+      attemptedAt > 0 &&
+      attemptedAt + LIBRARY_TITLE_RETRY_MS > now
+    );
+  }
+
+  async function backfillSummaryLibraryTitle(summary, options) {
+    const videoId = String(summary?.videoId || "");
+    const targetLanguage = normalizeSummaryLanguage(summary?.targetLanguage);
+    if (!isCurrentSummary(summary, videoId, targetLanguage)) {
+      return { summary, updated: false, attempted: false };
+    }
+    const attemptedAt = Math.max(
+      0,
+      Math.floor(Number(options.now ? options.now() : Date.now()) || 0),
+    );
+    if (!shouldBackfillLibraryTitle(summary, attemptedAt)) {
+      return { summary, updated: false, attempted: false };
+    }
+
+    let libraryTitle = "";
+    let status = "failed";
+    try {
+      const structure = await requestStructure(summary.points, {
+        ...options,
+        targetLanguage,
+      });
+      libraryTitle = normalizeLibraryTitle(structure?.libraryTitle);
+      status = libraryTitle ? "complete" : "failed";
+    } catch (error) {
+      if (options.signal?.aborted) throw error;
+    }
+
+    const key = summaryCacheKey(videoId, targetLanguage);
+    return queueSummaryMetadataMutation(key, async () => {
+      const latest = await storageGet(options.storage, key);
+      if (
+        !isCurrentSummary(latest, videoId, targetLanguage) ||
+        (Number(latest?.generatedAt) || 0) !==
+          (Number(summary?.generatedAt) || 0)
+      ) {
+        return {
+          summary: isCurrentSummary(latest, videoId, targetLanguage)
+            ? latest
+            : summary,
+          updated: false,
+          attempted: true,
+        };
+      }
+      const patched = {
+        ...latest,
+        libraryTitle,
+        libraryTitlePromptVersion: LIBRARY_TITLE_PROMPT_VERSION,
+        libraryTitleStatus: status,
+        libraryTitleAttemptedAt: attemptedAt,
+        libraryTitleGeneratedAt: libraryTitle ? attemptedAt : 0,
+      };
+      await storageSet(options.storage, { [key]: patched });
+      return { summary: patched, updated: true, attempted: true };
+    });
   }
 
   async function getCachedOverview(videoId, rawTargetLanguage, storage) {
@@ -1390,12 +1497,14 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     });
 
     const summaryKey = summaryCacheKey(videoId, targetLanguage);
-    const summary = await storageGet(options.storage, summaryKey);
-    if (isCurrentSummary(summary, videoId, targetLanguage)) {
-      await storageSet(options.storage, {
-        [summaryKey]: { ...summary, overview },
-      });
-    }
+    await queueSummaryMetadataMutation(summaryKey, async () => {
+      const summary = await storageGet(options.storage, summaryKey);
+      if (isCurrentSummary(summary, videoId, targetLanguage)) {
+        await storageSet(options.storage, {
+          [summaryKey]: { ...summary, overview },
+        });
+      }
+    });
     return { overview, generatedAt, source: "generated", cached: false };
   }
 
@@ -1588,10 +1697,14 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     let sections = [];
     let keyInsights = [];
     let suggestedIntents = [];
+    let libraryTitle = "";
+    let libraryTitleStatus = "failed";
     try {
       await options.onStructureStart?.({ pointCount: points.length });
-      ({ sections, keyInsights, suggestedIntents } =
+      ({ sections, keyInsights, suggestedIntents, libraryTitle } =
         await requestStructure(points, { ...options, targetLanguage }));
+      libraryTitle = normalizeLibraryTitle(libraryTitle);
+      libraryTitleStatus = libraryTitle ? "complete" : "failed";
     } catch (error) {
       if (options.signal?.aborted) throw new Error("摘要生成已取消");
       // 观点已经完整生成；汇总失败时缓存并返回平铺列表。
@@ -1604,6 +1717,7 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
       targetLanguage,
       options.storage,
     );
+    const generatedAt = options.now ? options.now() : Date.now();
     const summary = {
       videoId,
       duration: Number(duration) || 0,
@@ -1611,8 +1725,13 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
       targetLanguage,
       schemaVersion: SUMMARY_SCHEMA_VERSION,
       promptVersion: SUMMARY_PROMPT_VERSION,
-      generatedAt: options.now ? options.now() : Date.now(),
+      generatedAt,
       overview: cachedOverview?.overview || "",
+      libraryTitle,
+      libraryTitlePromptVersion: LIBRARY_TITLE_PROMPT_VERSION,
+      libraryTitleStatus,
+      libraryTitleAttemptedAt: generatedAt,
+      libraryTitleGeneratedAt: libraryTitle ? generatedAt : 0,
       sections,
       keyInsights,
       suggestedIntents,
@@ -1627,6 +1746,8 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     CONTEXT_EXPLANATION_SYSTEM_PROMPT,
     DEFAULT_SUMMARY_LANGUAGE,
     DEFAULT_RECOMMENDATION_PROMPT_VERSION,
+    LIBRARY_TITLE_PROMPT_VERSION,
+    LIBRARY_TITLE_RETRY_MS,
     SUMMARY_LANGUAGES,
     SUMMARY_PROMPT_VERSION,
     SUMMARY_SCHEMA_VERSION,
@@ -1640,6 +1761,7 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     SYSTEM_PROMPT,
     chunkSegments,
     buildExplanationContext,
+    backfillSummaryLibraryTitle,
     contextExplanationPromptForLanguage,
     dedupePointsByTimestamp,
     defaultRecommendationCacheKey,
@@ -1653,6 +1775,8 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     getCachedOverview,
     intentPointLines,
     matchVideoIntent,
+    libraryTitleFromSummary,
+    normalizeLibraryTitle,
     normalizeSummaryLanguage,
     normalizeIntent,
     normalizeExplanationSelection,
@@ -1674,6 +1798,7 @@ keyInsights 可以为空数组（如果没有特别突出的洞见）。不要�
     segmentLine,
     structurePointLines,
     structurePromptForLanguage,
+    shouldBackfillLibraryTitle,
     overviewPromptForLanguage,
     summaryCacheKey,
     summaryLanguageLabel,

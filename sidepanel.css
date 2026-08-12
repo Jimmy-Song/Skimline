@@ -716,6 +716,10 @@ body {
   gap: 4px;
 }
 
+.yvpm-video-group-copy-localized {
+  gap: 3px;
+}
+
 .yvpm-video-group-title {
   display: -webkit-box;
   min-width: 0;
@@ -727,8 +731,25 @@ body {
   -webkit-line-clamp: 2;
 }
 
+.yvpm-video-group-title-localized {
+  font-size: 0.75rem;
+}
+
 html[data-text-scale="expanded"] .yvpm-video-group-title {
   -webkit-line-clamp: 3;
+}
+
+.yvpm-video-group-origin {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font: 0.59375rem/1.35 var(--font-detail);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.yvpm-video-group-copy-localized .yvpm-video-group-meta {
+  font-family: var(--font-time);
 }
 
 .yvpm-video-group-meta {

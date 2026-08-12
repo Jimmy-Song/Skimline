@@ -65,6 +65,55 @@
     return String(value || "").trim().slice(0, 128);
   }
 
+  function normalizeStoredVideoTitle(value) {
+    return normalizeClippingText(value)
+      .replace(/^\s*[\(（]\d+[\)）]\s*/, "")
+      .slice(0, 300);
+  }
+
+  function normalizeTitleLanguage(value) {
+    const raw = String(value || "").trim().slice(0, 32);
+    if (!raw) return "";
+    try {
+      return Intl.getCanonicalLocales(raw)[0] || "";
+    } catch {
+      return "";
+    }
+  }
+
+  function normalizeVideoTitleEntry(value) {
+    const videoId = normalizeVideoId(value?.videoId);
+    const targetLanguage = normalizeTitleLanguage(value?.targetLanguage);
+    const title = [...normalizeClippingText(value?.title)]
+      .slice(0, 120)
+      .join("");
+    const promptVersion = Math.max(
+      0,
+      Math.floor(Number(value?.promptVersion) || 0),
+    );
+    const generatedAt = Math.max(
+      0,
+      Math.floor(Number(value?.generatedAt) || 0),
+    );
+    if (
+      !videoId ||
+      !targetLanguage ||
+      !title ||
+      !promptVersion ||
+      !generatedAt
+    ) {
+      return null;
+    }
+    return { videoId, targetLanguage, title, promptVersion, generatedAt };
+  }
+
+  function videoTitleEntryKey(value) {
+    const entry = normalizeVideoTitleEntry(value);
+    return entry
+      ? JSON.stringify([entry.videoId, entry.targetLanguage])
+      : "";
+  }
+
   function normalizeStoredClipping(value) {
     const selectedText = normalizeClippingText(value?.selectedText);
     const videoId = normalizeVideoId(value?.videoId);
@@ -86,7 +135,7 @@
       selectedText,
       videoId,
       videoTitle:
-        normalizeClippingText(value?.videoTitle).slice(0, 300) ||
+        normalizeStoredVideoTitle(value?.videoTitle) ||
         `YouTube 视频 ${videoId}`,
       anchorT:
         sourceType === "overview" ? null : normalizeAnchorT(value?.anchorT),
@@ -146,6 +195,33 @@
     return JSON.stringify(left) >= JSON.stringify(right) ? left : right;
   }
 
+  function chooseCanonicalVideoTitle(left, right) {
+    if (left.promptVersion !== right.promptVersion) {
+      return left.promptVersion > right.promptVersion ? left : right;
+    }
+    if (left.generatedAt !== right.generatedAt) {
+      return left.generatedAt > right.generatedAt ? left : right;
+    }
+    return JSON.stringify(left) >= JSON.stringify(right) ? left : right;
+  }
+
+  function normalizeVideoTitles(values) {
+    const byKey = new Map();
+    for (const rawEntry of Array.isArray(values) ? values : []) {
+      const entry = normalizeVideoTitleEntry(rawEntry);
+      if (!entry) continue;
+      const key = videoTitleEntryKey(entry);
+      const existing = byKey.get(key);
+      byKey.set(
+        key,
+        existing ? chooseCanonicalVideoTitle(existing, entry) : entry,
+      );
+    }
+    return [...byKey.values()].sort((left, right) =>
+      compareStrings(videoTitleEntryKey(left), videoTitleEntryKey(right)),
+    );
+  }
+
   function normalizeReplicaState(value) {
     const addsById = new Map();
     const rawAdds = Array.isArray(value?.adds)
@@ -172,6 +248,10 @@
         .filter(Boolean),
     );
 
+    // videoTitles is a grow-only LWW map. Without a replicated deletion
+    // protocol, orphaned entries must remain so merges stay monotonic.
+    const videoTitles = normalizeVideoTitles(value?.videoTitles);
+
     return {
       schemaVersion: CLIPPINGS_SCHEMA_VERSION,
       revision: Math.max(0, Math.floor(Number(value?.revision) || 0)),
@@ -179,12 +259,14 @@
         .filter((item) => !removes.has(item.id))
         .sort(compareClippings),
       removes: [...removes].sort(compareStrings),
+      videoTitles,
     };
   }
 
   function mergeClippingStates(states) {
     const addsById = new Map();
     const removes = new Set();
+    const videoTitlesByKey = new Map();
     for (const rawState of Array.isArray(states) ? states : []) {
       const state = normalizeReplicaState(rawState);
       for (const item of state.adds) {
@@ -195,6 +277,14 @@
         );
       }
       for (const id of state.removes) removes.add(id);
+      for (const entry of state.videoTitles) {
+        const key = videoTitleEntryKey(entry);
+        const existing = videoTitlesByKey.get(key);
+        videoTitlesByKey.set(
+          key,
+          existing ? chooseCanonicalVideoTitle(existing, entry) : entry,
+        );
+      }
     }
     return {
       schemaVersion: CLIPPINGS_SCHEMA_VERSION,
@@ -202,6 +292,37 @@
         .filter((item) => !removes.has(item.id))
         .sort(compareClippings),
       removes: [...removes].sort(compareStrings),
+      videoTitles: normalizeVideoTitles([...videoTitlesByKey.values()]),
+    };
+  }
+
+  function upsertVideoTitle(storeValue, entryValue) {
+    const store = normalizeReplicaState(storeValue);
+    const entry = normalizeVideoTitleEntry(entryValue);
+    if (!entry) throw new Error("视频标题元数据无效");
+    const key = videoTitleEntryKey(entry);
+    const existing = store.videoTitles.find(
+      (candidate) => videoTitleEntryKey(candidate) === key,
+    );
+    const canonical = existing
+      ? chooseCanonicalVideoTitle(existing, entry)
+      : entry;
+    const changed =
+      !existing || JSON.stringify(canonical) !== JSON.stringify(existing);
+    if (!changed) return { store, entry: existing, changed: false };
+    return {
+      store: normalizeReplicaState({
+        ...store,
+        revision: store.revision + 1,
+        videoTitles: [
+          ...store.videoTitles.filter(
+            (candidate) => videoTitleEntryKey(candidate) !== key,
+          ),
+          canonical,
+        ],
+      }),
+      entry: canonical,
+      changed: true,
     };
   }
 
@@ -316,6 +437,9 @@
       exportedAt: Math.max(1, Math.floor(Number(options.now) || Date.now())),
       adds: store.adds,
       removes: store.removes,
+      ...(store.videoTitles.length
+        ? { videoTitles: store.videoTitles }
+        : {}),
     };
   }
 
@@ -324,24 +448,34 @@
       value?.format !== CLIPPINGS_BACKUP_FORMAT ||
       Number(value?.schemaVersion) !== CLIPPINGS_SCHEMA_VERSION ||
       !Array.isArray(value?.adds) ||
-      !Array.isArray(value?.removes)
+      !Array.isArray(value?.removes) ||
+      (value?.videoTitles !== undefined &&
+        !Array.isArray(value.videoTitles))
     ) {
       throw new Error("这不是有效的 Skimline 收藏备份");
     }
     const normalizedAdds = value.adds.map(normalizeStoredClipping);
     const normalizedRemoves = value.removes.map(normalizeClippingId);
+    const rawVideoTitles = Array.isArray(value?.videoTitles)
+      ? value.videoTitles
+      : [];
+    const normalizedVideoTitles = rawVideoTitles.map(normalizeVideoTitleEntry);
     if (
       normalizedAdds.some((item) => !item) ||
       normalizedRemoves.some((id) => !id) ||
+      normalizedVideoTitles.some((entry) => !entry) ||
       new Set(normalizedAdds.map((item) => item.id)).size !==
-        normalizedAdds.length ||
-      new Set(normalizedRemoves).size !== normalizedRemoves.length
+      normalizedAdds.length ||
+      new Set(normalizedRemoves).size !== normalizedRemoves.length ||
+      new Set(normalizedVideoTitles.map(videoTitleEntryKey)).size !==
+        normalizedVideoTitles.length
     ) {
       throw new Error("收藏备份包含损坏或重复的记录");
     }
     const state = normalizeReplicaState({
       adds: normalizedAdds,
       removes: normalizedRemoves,
+      videoTitles: normalizedVideoTitles,
     });
     return {
       format: CLIPPINGS_BACKUP_FORMAT,
@@ -349,6 +483,7 @@
       exportedAt: Math.max(0, Math.floor(Number(value.exportedAt) || 0)),
       adds: state.adds,
       removes: state.removes,
+      videoTitles: state.videoTitles,
     };
   }
 
@@ -356,8 +491,16 @@
     const store = normalizeReplicaState(storeValue);
     const backup = normalizeClippingsBackup(backupValue);
     const merged = mergeClippingStates([store, backup]);
-    const before = JSON.stringify({ adds: store.adds, removes: store.removes });
-    const after = JSON.stringify({ adds: merged.adds, removes: merged.removes });
+    const before = JSON.stringify({
+      adds: store.adds,
+      removes: store.removes,
+      videoTitles: store.videoTitles,
+    });
+    const after = JSON.stringify({
+      adds: merged.adds,
+      removes: merged.removes,
+      videoTitles: merged.videoTitles,
+    });
     const changed = before !== after;
     return {
       store: normalizeReplicaState({
@@ -369,9 +512,11 @@
     };
   }
 
-  function groupClippingsByVideo(items, rawQuery) {
+  function groupClippingsByVideo(items, rawQuery, options = {}) {
     const query = normalizeSearchText(rawQuery);
     const normalizedItems = buildClippingsView(items);
+    const videoTitles = normalizeVideoTitles(options.videoTitles);
+    const targetLanguage = normalizeTitleLanguage(options.targetLanguage);
     const groupsByVideoId = new Map();
 
     for (const item of normalizedItems) {
@@ -394,6 +539,15 @@
       }
     }
 
+    for (const entry of videoTitles) {
+      const group = groupsByVideoId.get(entry.videoId);
+      if (!group) continue;
+      group.searchableTitles.add(normalizeSearchText(entry.title));
+      if (entry.targetLanguage === targetLanguage) {
+        group.libraryTitle = entry.title;
+      }
+    }
+
     return [...groupsByVideoId.values()]
       .map((group) => {
         const titleMatched = Boolean(
@@ -409,6 +563,7 @@
         return {
           videoId: group.videoId,
           videoTitle: group.videoTitle,
+          libraryTitle: group.libraryTitle || "",
           latestSavedAt: group.latestSavedAt,
           totalCount: group.allItems.length,
           visibleCount: visibleItems.length,
@@ -443,11 +598,15 @@
     materializeLiveItems,
     mergeClippingStates,
     normalizeClippingText,
+    normalizeVideoTitleEntry,
+    normalizeVideoTitles,
     normalizeClippingsBackup,
     normalizeReplicaState,
     removeClipping,
     restoreClipping,
     searchClippings,
+    upsertVideoTitle,
+    videoTitleEntryKey,
   };
 
   root.SkimlineCollections = Object.assign(root.SkimlineCollections || {}, api);
