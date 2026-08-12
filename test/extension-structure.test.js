@@ -110,6 +110,26 @@ test("设置页只保存本地 API Key", () => {
   assert.doesNotMatch(js, /fetch\s*\(/);
 });
 
+test("本地存储只向受信任扩展上下文开放", () => {
+  const background = fs.readFileSync(path.join(root, "background.js"), "utf8");
+  const manifest = JSON.parse(
+    fs.readFileSync(path.join(root, "manifest.json"), "utf8"),
+  );
+  assert.match(background, /async function restrictLocalStorageAccess/);
+  assert.match(background, /chrome\.storage\?\.local\?\.setAccessLevel\?\./);
+  assert.match(background, /accessLevel: "TRUSTED_CONTEXTS"/);
+  assert.match(background, /catch \{[\s\S]*?void restrictLocalStorageAccess\(\)/);
+
+  const contentScriptFiles = manifest.content_scripts.flatMap(
+    (definition) => definition.js || [],
+  );
+  assert.ok(contentScriptFiles.length > 0);
+  for (const file of contentScriptFiles) {
+    const source = fs.readFileSync(path.join(root, file), "utf8");
+    assert.doesNotMatch(source, /chrome\.storage/, `${file} 不应直接访问扩展存储`);
+  }
+});
+
 test("收藏 schema v2 只在最终 DOM 渲染限制数量", () => {
   const collections = fs.readFileSync(
     path.join(root, "collection-utils.js"),

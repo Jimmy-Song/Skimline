@@ -3,6 +3,7 @@ config.local.js
 .env
 node_modules/
 *.log
+*.pem
 .DS_Store
 config.local.js
 .DS_Store

@@ -8,15 +8,17 @@ Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中
 
 ## 下载与安装
 
-如果你只想安装扩展：
+如果你只想从 GitHub 安装扩展：
 
-1. 下载 `releases/skimline-0.5.0-extension.zip`。
-2. 解压 ZIP，并进入其中的 `skimline-0.5.0` 目录。
+1. 下载 `releases/skimline-0.5.1-extension.zip`。
+2. 解压 ZIP，并进入其中固定名称的 `skimline-extension` 目录。
 3. 打开 Chrome，在地址栏输入 `chrome://extensions`。
 4. 打开右上角“开发者模式”。
 5. 点击“加载已解压的扩展程序”，选择解压后的项目目录。
 6. 在扩展卡片中点击“详细信息”→“扩展程序选项”，填入自己的 DeepSeek API Key 并保存。
 7. 打开一个带字幕的 `youtube.com/watch?v=...` 视频，点击 Chrome 工具栏中的“Skimline”图标，浏览器右侧会打开专属 Side Panel。
+
+如果电脑上已经安装 0.5.0 或更早版本，请不要直接移除旧扩展。先按照 [安全升级指南](UPGRADING.md) 导出洞见、禁用旧版并完成最后一次迁移。以后更新 GitHub 版时，只替换 Chrome 当前加载目录中的文件并点击扩展卡片上的“重新加载”，不要再次加载成另一份扩展。
 
 如果你是开发者从源码运行：
 
@@ -48,6 +50,16 @@ Side Panel 不会覆盖视频或 YouTube 推荐栏。确认语言后，整期概
 
 修改代码后，在 `chrome://extensions` 的扩展卡片上点击刷新按钮，再刷新 YouTube 页面。
 
+## 发布包
+
+`npm run build:release` 会从同一份源码生成两个经过文件白名单限制的产物：
+
+- `releases/skimline-0.5.1-extension.zip`：GitHub 手动安装包，内部使用稳定目录 `skimline-extension/`，保留 manifest 中用于固定开发版扩展 ID 的公开 `key`。
+- `releases/skimline-0.5.1-cws.zip`：Chrome Web Store 上传包，manifest 位于 ZIP 根目录，并在构建时自动移除 `key`。
+
+`npm run build:cws` 只重建商店包。两种产物都不会包含 `.pem` 私钥、本机配置、测试文件或开发脚本。
+在首次商店上传并取得公开公钥之前，完整构建会拒绝生成 GitHub 包，避免误发一个 ID 尚未固定的版本。
+
 ## 测试
 
 要求 Node.js 20 或更高版本：
@@ -76,7 +88,8 @@ npm run build:release
 ```bash
 npm test
 npm run build:release
-unzip -t releases/skimline-0.5.0-extension.zip
+unzip -t releases/skimline-0.5.1-extension.zip
+unzip -t releases/skimline-0.5.1-cws.zip
 git ls-files -z | xargs -0 rg -n "(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer [A-Za-z0-9._-]{20,})" -S
 ```
 
