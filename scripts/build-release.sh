@@ -106,6 +106,7 @@ if [ "${build_github}" = true ]; then
   copy_runtime_files "${github_root}"
   node "${release_root}/scripts/write-release-manifest.js" \
     github "${release_root}/manifest.json" "${github_root}/manifest.json"
+  copy_release_file "${release_root}/CHANGELOG.md" "${github_root}/CHANGELOG.md"
   copy_release_file "${release_root}/README.md" "${github_root}/README.md"
   copy_release_file \
     "${release_root}/UPGRADING.md" "${github_root}/UPGRADING.md"

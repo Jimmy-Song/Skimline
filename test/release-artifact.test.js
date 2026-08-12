@@ -130,7 +130,12 @@ test("GitHub 发布包使用固定目录、保留源码 manifest 且不夹带私
 
   execFileSync("unzip", ["-t", archive], { stdio: "pipe" });
   const entries = archiveEntries(archive);
-  const expectedFiles = [...runtimeFiles, "README.md", "UPGRADING.md"]
+  const expectedFiles = [
+    ...runtimeFiles,
+    "CHANGELOG.md",
+    "README.md",
+    "UPGRADING.md",
+  ]
     .map((file) => `${githubDirectory}/${file}`)
     .sort();
   assert.deepEqual([...entries].sort(), expectedFiles);
@@ -147,7 +152,12 @@ test("GitHub 发布包使用固定目录、保留源码 manifest 且不夹带私
   );
   assert.deepEqual(packagedManifest, manifest);
 
-  for (const releaseFile of [...runtimeFiles, "README.md", "UPGRADING.md"]) {
+  for (const releaseFile of [
+    ...runtimeFiles,
+    "CHANGELOG.md",
+    "README.md",
+    "UPGRADING.md",
+  ]) {
     if (releaseFile === "manifest.json") continue;
     assert.deepEqual(
       archiveFile(archive, `${githubDirectory}/${releaseFile}`),

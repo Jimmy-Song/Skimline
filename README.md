@@ -10,7 +10,7 @@ Skimline 是一个 Manifest V3 Chrome 扩展：在浏览器原生 Side Panel 中
 
 如果你只想从 GitHub 安装扩展：
 
-1. 下载 `releases/skimline-0.5.1-extension.zip`。
+1. 下载 `releases/skimline-0.5.2-extension.zip`。
 2. 解压 ZIP，并进入其中固定名称的 `skimline-extension` 目录。
 3. 打开 Chrome，在地址栏输入 `chrome://extensions`。
 4. 打开右上角“开发者模式”。
@@ -54,8 +54,8 @@ Side Panel 不会覆盖视频或 YouTube 推荐栏。确认语言后，整期概
 
 `npm run build:release` 会从同一份源码生成两个经过文件白名单限制的产物：
 
-- `releases/skimline-0.5.1-extension.zip`：GitHub 手动安装包，内部使用稳定目录 `skimline-extension/`，保留 manifest 中用于固定开发版扩展 ID 的公开 `key`。
-- `releases/skimline-0.5.1-cws.zip`：Chrome Web Store 上传包，manifest 位于 ZIP 根目录，并在构建时自动移除 `key`。
+- `releases/skimline-0.5.2-extension.zip`：GitHub 手动安装包，内部使用稳定目录 `skimline-extension/`，保留 manifest 中用于固定开发版扩展 ID 的公开 `key`。
+- `releases/skimline-0.5.2-cws.zip`：Chrome Web Store 上传包，manifest 位于 ZIP 根目录，并在构建时自动移除 `key`。
 
 `npm run build:cws` 只重建商店包。两种产物都不会包含 `.pem` 私钥、本机配置、测试文件或开发脚本。
 在首次商店上传并取得公开公钥之前，完整构建会拒绝生成 GitHub 包，避免误发一个 ID 尚未固定的版本。
@@ -88,8 +88,8 @@ npm run build:release
 ```bash
 npm test
 npm run build:release
-unzip -t releases/skimline-0.5.1-extension.zip
-unzip -t releases/skimline-0.5.1-cws.zip
+unzip -t releases/skimline-0.5.2-extension.zip
+unzip -t releases/skimline-0.5.2-cws.zip
 git ls-files -z | xargs -0 rg -n "(sk-[A-Za-z0-9_-]{20,}|AIza[0-9A-Za-z_-]{20,}|Bearer [A-Za-z0-9._-]{20,})" -S
 ```
 

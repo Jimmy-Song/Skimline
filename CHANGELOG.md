@@ -2,18 +2,20 @@
 
 从 Skimline 0.4.0 起，本文件按版本记录用户可感知的新增需求与重要修复。后续每次发布都在顶部追加独立版本章节。
 
-## Skimline 0.5.1 — 2026-08-12
+## Skimline 0.5.2 — 2026-08-12
 
 ### 新增需求
 
 - GitHub 手动安装包开始使用固定内层目录，并为固定扩展 ID 迁移提供逐设备备份、禁用、导入、核对和回退说明。
 - 发布流程同时生成 GitHub 安装包与 Chrome Web Store 上传包；商店包使用根目录 manifest，并自动移除仅供开发版固定 ID 使用的公开 `key` 字段。
 - 扩展启动时把 `chrome.storage.local` 限制为受信任扩展上下文访问，继续在本机保存 API Key、洞见库和摘要缓存，但不再向内容脚本暴露存储接口。
+- 发布检查现在会按 Side Panel 的真实脚本顺序验证全部共享 API 依赖，并同步校验浏览器 UI harness，避免页面入口遗漏共享脚本。
 
 ### 重要修复
 
 - 避免版本号内层目录导致用户把新版加载成另一份扩展，并明确区分“禁用会保留数据”和“移除会清除本地数据”。
 - 发布包改为严格文件白名单，防止 `.pem` 私钥、本机配置、开发文件或历史遗留文件进入 GitHub/CWS 产物。
+- 修复 Side Panel 未加载摘要共享工具，导致摘要完成或读取缓存时报 `libraryTitleFromSummary is not a function`、搜索或提问输入时报 `classifyIntent is not a function`，以及答卷收藏状态同步时报 `normalizeAnswerQuestion is not a function` 的问题。
 
 ## Skimline 0.5.0 — 2026-08-12
 

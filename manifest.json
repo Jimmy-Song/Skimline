@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Skimline",
-  "version": "0.5.1",
+  "version": "0.5.2",
   "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEA4HIjPXvkPQghOdVANbM3rIaklgjNQVFx9TFod8sA+bx4awdPrt28t1webJjRNBLa0dZxegBwxfiHsGfnj3DTK+kVjJffr2uhMp0wUloUpy7t5CCfQLQtaNuwp63E7NN3vUaWAsq2f5ZqIpnO/F0WDqo/sfb7D7Av9qGh/+vgE4pDsr82g/RfZc5lz8DrhESGXEwfMIns45wZpAODh2bjtu069Swej7YDLxMJ6OutMF9H0mB8LN4MDxiB2WLwVXvyzMz0UVQ41Ah7MwXtT7W4CZJPUoORVIHv1yEFfAZR/jjl1SCmCSnJ/2OIdGqo3u1gegG955x7f6fqnDcLfrxl2QIDAQAB",
   "minimum_chrome_version": "114",
   "description": "Skim any long YouTube video into a scannable, jump-anywhere map of its ideas.",
