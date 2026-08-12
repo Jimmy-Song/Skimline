@@ -538,3 +538,100 @@ test("视频分组不会修改调用方传入的收藏数组", () => {
   Collections.groupClippingsByVideo(items, "收藏");
   assert.deepEqual(items, snapshot);
 });
+
+test("答卷记录保留完整快照并带旧版可识别的 selectedText 外壳", () => {
+  const answer = Collections.createAnswerClipping(
+    {
+      kind: "answer",
+      videoId: "abcdefghijk",
+      videoTitle: "示例视频",
+      targetLanguage: "zh-CN",
+      question: "为什么要避免循环工程？",
+      directAnswer: "因为它会让评测失去独立性。",
+      evidenceTs: [12],
+      steps: [{ text: "先固定评测集", sourceTs: [12] }],
+      uncertain: true,
+      notice: "摘要信息有限",
+      usedCaptions: false,
+    },
+    { id: "answer-1", now: 1000 },
+  );
+  assert.equal(answer.kind, "answer");
+  assert.match(answer.selectedText, /^答卷：/);
+  assert.ok([...answer.selectedText].length <= 200);
+  assert.deepEqual(answer.evidenceTs, [12]);
+  assert.equal(answer.anchorT, 12);
+  const normalized = Collections.normalizeReplicaState({ adds: [answer] });
+  assert.equal(normalized.adds.length, 1);
+  assert.equal(normalized.adds[0].kind, "answer");
+  assert.doesNotThrow(() =>
+    Collections.normalizeClippingsBackup({
+      format: Collections.CLIPPINGS_BACKUP_FORMAT,
+      schemaVersion: 2,
+      exportedAt: 1000,
+      adds: [answer],
+      removes: [],
+    }),
+  );
+});
+
+test("同一问题更新答卷会墓碑旧快照且不影响普通圈选", () => {
+  const clipping = Collections.createClipping(
+    {
+      videoId: "abcdefghijk",
+      selectedText: "普通圈选",
+      anchorT: 3,
+      sourceType: "claim",
+    },
+    { id: "clip-1", now: 100 },
+  );
+  const first = Collections.createAnswerClipping(
+    {
+      videoId: "abcdefghijk",
+      targetLanguage: "zh-CN",
+      question: "为什么要避免循环工程？",
+      directAnswer: "第一版回答",
+      evidenceTs: [10],
+      steps: [],
+    },
+    { id: "answer-1", now: 200 },
+  );
+  let store = Collections.addClipping(null, clipping).store;
+  store = Collections.upsertAnswerClipping(store, first).store;
+  const second = Collections.createAnswerClipping(
+    {
+      ...first,
+      directAnswer: "追问后的最新版回答",
+      evidenceTs: [20],
+    },
+    { id: "answer-2", now: 300 },
+  );
+  const updated = Collections.upsertAnswerClipping(store, second);
+  assert.deepEqual(updated.replacedIds, ["answer-1"]);
+  const view = Collections.listClippings([updated.store]);
+  assert.equal(view.length, 2);
+  assert.equal(view.filter((item) => item.kind === "answer").length, 1);
+  assert.equal(
+    view.find((item) => item.kind === "answer").directAnswer,
+    "追问后的最新版回答",
+  );
+  assert.ok(view.some((item) => item.id === "clip-1"));
+});
+
+test("答卷搜索覆盖问题、正文、步骤和提示字段", () => {
+  const answer = Collections.createAnswerClipping(
+    {
+      videoId: "abcdefghijk",
+      targetLanguage: "zh-CN",
+      question: "如何设计评测？",
+      directAnswer: "先建立独立基线。",
+      evidenceTs: [10],
+      steps: [{ text: "隔离训练数据", sourceTs: [10] }],
+      notice: "字幕存在转写误差",
+    },
+    { id: "answer-search", now: 1000 },
+  );
+  for (const query of ["评测", "独立基线", "训练数据", "转写误差"]) {
+    assert.equal(Collections.searchClippings([answer], query).length, 1);
+  }
+});

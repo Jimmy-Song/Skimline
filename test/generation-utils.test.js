@@ -1481,3 +1481,138 @@ test("超时覆盖完整 SSE 读取过程", async () => {
     /请求超时/,
   );
 });
+
+test("答卷输入按问句、任务动词、关键词和歧义短语三态分流", () => {
+  assert.equal(YouTubeSummary.classifyIntent("MCP"), "keyword");
+  assert.equal(
+    YouTubeSummary.classifyIntent("为什么评测要避免循环工程？"),
+    "answer",
+  );
+  assert.equal(
+    YouTubeSummary.classifyIntent("帮我整理一下操作步骤"),
+    "answer",
+  );
+  assert.equal(
+    YouTubeSummary.classifyIntent("MCP 与 skills 的职责边界划分"),
+    "ambiguous",
+  );
+  assert.equal(
+    YouTubeSummary.classifyIntent("Explain the tradeoffs"),
+    "answer",
+  );
+});
+
+test("答卷上下文受硬预算约束且合法时间戳只来自真正进入上下文的观点", () => {
+  const points = Array.from({ length: 80 }, (_, index) => ({
+    t: index * 10,
+    point: `观点 ${index} ${"很长的内容".repeat(20)}`,
+    detail: `详情 ${index} ${"补充说明".repeat(100)}`,
+  }));
+  const context = YouTubeSummary.buildAnswerSummaryContext(
+    {
+      overview: "总览".repeat(1000),
+      sections: Array.from({ length: 30 }, (_, index) => ({
+        startT: index * 20,
+        title: `章节 ${index} ${"标题".repeat(100)}`,
+      })),
+      points,
+    },
+    "哪些观点最重要？",
+    { maxChars: 2400 },
+  );
+  assert.ok([...context.text].length <= 2400);
+  assert.ok(context.validTs.length > 0);
+  for (const timestamp of context.validTs) {
+    assert.match(context.text, new RegExp(`\\[${timestamp}\\]`));
+  }
+  const changed = YouTubeSummary.buildAnswerSummaryContext(
+    {
+      overview: "总览".repeat(1000),
+      sections: [{ startT: 0, title: "已改写的章节标题" }],
+      points,
+    },
+    "哪些观点最重要？",
+    { maxChars: 2400 },
+  );
+  assert.notEqual(context.summaryFingerprint, changed.summaryFingerprint);
+});
+
+test("答卷解析精确校验观点时间，不吸附近似值并允许零步骤", () => {
+  const parsed = YouTubeSummary.parseAnswerJson(
+    JSON.stringify({
+      action: "answer",
+      scope: "in_scope",
+      directAnswer: "结论",
+      evidenceTs: [10, 11, 10],
+      steps: [],
+      uncertain: false,
+      notice: "",
+    }),
+    [10, 20],
+  );
+  assert.deepEqual(parsed.evidenceTs, [10]);
+  assert.deepEqual(parsed.steps, []);
+  assert.throws(
+    () =>
+      YouTubeSummary.parseAnswerJson(
+        JSON.stringify({
+          action: "answer",
+          scope: "in_scope",
+          directAnswer: "结论",
+          evidenceTs: [11],
+          steps: [],
+        }),
+        [10, 20],
+      ),
+    /没有合法时间依据/,
+  );
+});
+
+test("追问字幕升级必须携带可用 fallback，新问题忽略夹带答案", () => {
+  const upgrade = YouTubeSummary.parseAnswerJson(
+    JSON.stringify({
+      action: "need_captions",
+      scope: "in_scope",
+      fallbackAnswer: {
+        directAnswer: "摘要能支持的回答",
+        evidenceTs: [20],
+        steps: [],
+        uncertain: false,
+      },
+      retrieval: { query: "评测", anchorTs: [20, 21] },
+    }),
+    [10, 20],
+    { allowNeedCaptions: true },
+  );
+  assert.equal(upgrade.fallbackAnswer.uncertain, true);
+  assert.deepEqual(upgrade.retrieval.anchorTs, [20]);
+  const newQuestion = YouTubeSummary.parseAnswerJson(
+    JSON.stringify({
+      action: "answer",
+      scope: "new_question",
+      directAnswer: "不应采用",
+      evidenceTs: [10],
+      notice: "请重新提问",
+    }),
+    [10],
+    { allowNewQuestion: true },
+  );
+  assert.equal(newQuestion.scope, "new_question");
+  assert.equal("directAnswer" in newQuestion, false);
+});
+
+test("字幕窗支持多锚点与关键词召回并遵守字符上限", () => {
+  const result = YouTubeSummary.buildAnswerCaptionWindow(
+    [
+      { tMs: 10000, text: "第一个锚点附近" },
+      { tMs: 200000, text: "关键词循环工程出现在远处" },
+      { tMs: 300000, text: "第二个锚点附近" },
+    ],
+    { query: "循环工程", anchorTs: [10, 300] },
+    { windowMs: 1000, maxChars: 500 },
+  );
+  assert.match(result.text, /第一个锚点附近/);
+  assert.match(result.text, /第二个锚点附近/);
+  assert.match(result.text, /关键词循环工程/);
+  assert.ok([...result.text].length <= 500);
+});

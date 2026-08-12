@@ -267,6 +267,9 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
   assert.match(html, /id="yvpm-empty"/);
   assert.match(html, /id="yvpm-overview"/);
   assert.match(html, /id="yvpm-intent-form"/);
+  assert.match(html, /id="yvpm-answer"/);
+  assert.match(html, /id="yvpm-answer-followup-form"/);
+  assert.match(html, /id="yvpm-answer-save"/);
   assert.match(html, /id="yvpm-matchbar"/);
   assert.match(html, /id="yvpm-list-heading"/);
   assert.match(html, /id="yvpm-list-heading-title"/);
@@ -297,7 +300,10 @@ test("Side Panel 覆盖活动标签、渲染、SEEK、播放跟随与 SPA 刷新
     source,
     /async function seekWithFeedback\(t, \{ followPlayback = false \} = \{\}\)[\s\S]*?catch \(error\)[\s\S]*?showToast\(error\?\.message \|\| "视频跳转失败"\)/,
   );
-  assert.equal(source.match(/seekWithFeedback\(/g)?.length, 4);
+  assert.equal(source.match(/seekWithFeedback\(/g)?.length, 5);
+  assert.match(source, /YouTubeSummary\.classifyIntent/);
+  assert.match(source, /type: "START_ANSWER"/);
+  assert.match(source, /type: "CONTINUE_ANSWER_WITH_CAPTIONS"/);
   assert.match(source, /message\?\.type === "PLAYBACK_TIME"/);
   assert.match(source, /message\?\.type === "VIDEO_CHANGED"/);
   assert.match(

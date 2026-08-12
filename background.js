@@ -9,6 +9,10 @@ const EXPLANATION_TASK_TTL_MS = 2 * 60 * 60 * 1000;
 const EXPLANATION_TASK_STORAGE_PREFIX = "context-explanation-task:";
 const MAX_CONCURRENT_EXPLANATIONS = 2;
 const MAX_EXPLANATION_TURNS = 3;
+const ANSWER_TASK_TTL_MS = 24 * 60 * 60 * 1000;
+const ANSWER_TASK_STORAGE_PREFIX = "single-shot-answer-task:";
+const MAX_CONCURRENT_ANSWERS = 1;
+const MAX_ANSWER_FOLLOWUP_TURNS = 2;
 const CONTENT_MESSAGE_SOURCE = "youtube-viewpoint-map";
 const activeGenerations = new Map();
 const taskRecords = new Map();
@@ -20,7 +24,12 @@ const explanationTaskFingerprints = new Map();
 const queuedExplanationTaskIds = [];
 const explanationTaskControllers = new Map();
 const libraryTitleJobs = new Map();
+const answerTasks = new Map();
+const activeAnswerTaskByClient = new Map();
+const queuedAnswerOperations = [];
+const answerTaskControllers = new Map();
 let explanationTasksRestorePromise = null;
+let answerTasksRestorePromise = null;
 let clippingMutationQueue = Promise.resolve();
 
 chrome.sidePanel
@@ -185,6 +194,20 @@ function saveClipping(input) {
       duplicate: result.duplicate,
       count: listClippingsFromStore(nextStore).length,
       revision: nextStore.revision,
+    };
+  });
+}
+
+function saveAnswerClipping(input) {
+  return queueClippingMutation(async (store) => {
+    const answer = SkimlineCollections.createAnswerClipping(input);
+    const result = SkimlineCollections.upsertAnswerClipping(store, answer);
+    await persistClippingsStore(result.store);
+    return {
+      item: result.item,
+      replacedIds: result.replacedIds,
+      count: listClippingsFromStore(result.store).length,
+      revision: result.store.revision,
     };
   });
 }
@@ -823,6 +846,634 @@ async function dismissContextExplanation(taskId) {
   task.dismissed = true;
   await persistExplanationTask(task);
   return explanationTaskSnapshot(task);
+}
+
+function answerStorageArea() {
+  return chrome.storage.session || chrome.storage.local;
+}
+
+function answerStorageKey(taskId) {
+  return `${ANSWER_TASK_STORAGE_PREFIX}${taskId}`;
+}
+
+function answerPhaseKey(operationId, phase) {
+  return `${String(operationId || "")}\u001f${String(phase || "")}`;
+}
+
+function answerTaskSnapshot(task) {
+  return {
+    taskId: task.taskId,
+    status: task.status,
+    clientId: task.clientId,
+    sourceTabId: task.sourceTabId,
+    videoId: task.videoId,
+    videoTitle: task.videoTitle,
+    targetLanguage: task.targetLanguage,
+    question: task.question,
+    answer: task.answer,
+    turns: task.turns,
+    taskVersion: task.version,
+    dismissed: task.dismissed,
+    error: task.error,
+    pendingQuestion: task.pendingQuestion,
+    newQuestionNotice: task.newQuestionNotice,
+    captionUpgrade: task.captionUpgrade
+      ? {
+          status: task.captionUpgrade.status,
+          operationId: task.captionUpgrade.operationId,
+          taskVersion: task.captionUpgrade.taskVersion,
+          retrieval: task.captionUpgrade.retrieval,
+        }
+      : null,
+    createdAt: task.createdAt,
+    updatedAt: task.updatedAt,
+  };
+}
+
+function serializeAnswerTask(task) {
+  return {
+    ...answerTaskSnapshot(task),
+    version: task.version,
+    summaryText: task.summaryText,
+    validTs: task.validTs,
+    summaryFingerprint: task.summaryFingerprint,
+    answerKey: task.answerKey,
+    initialAnswer: task.initialAnswer,
+    operations: task.operations,
+    pendingOperation: task.pendingOperation,
+    captionUpgrade: task.captionUpgrade,
+  };
+}
+
+async function persistAnswerTask(task) {
+  task.updatedAt = Date.now();
+  await answerStorageArea().set({
+    [answerStorageKey(task.taskId)]: serializeAnswerTask(task),
+  });
+}
+
+async function broadcastAnswerTask(task) {
+  await broadcast({
+    type: "ANSWER_TASK_UPDATED",
+    task: answerTaskSnapshot(task),
+  });
+}
+
+function removeQueuedAnswerOperations(taskId) {
+  let index = queuedAnswerOperations.findIndex(
+    (operation) => operation.taskId === taskId,
+  );
+  while (index >= 0) {
+    queuedAnswerOperations.splice(index, 1);
+    index = queuedAnswerOperations.findIndex(
+      (operation) => operation.taskId === taskId,
+    );
+  }
+}
+
+function answerTaskFromStored(stored) {
+  if (
+    !stored?.taskId ||
+    !stored?.clientId ||
+    !stored?.videoId ||
+    !stored?.targetLanguage ||
+    !stored?.summaryText ||
+    !Array.isArray(stored?.validTs)
+  ) {
+    return null;
+  }
+  if (Date.now() - Number(stored.updatedAt || 0) > ANSWER_TASK_TTL_MS) {
+    return null;
+  }
+  const wasActive = ["queued", "running", "recovering"].includes(
+    stored.status,
+  );
+  const pendingOperation = stored.pendingOperation || null;
+  const canRecoverStageOne =
+    wasActive &&
+    pendingOperation &&
+    ["initial", "followup"].includes(pendingOperation.phase);
+  return {
+    ...stored,
+    status: canRecoverStageOne
+      ? "queued"
+      : wasActive && stored.answer
+        ? "ready"
+        : wasActive
+          ? "failed"
+          : String(stored.status || "failed"),
+    answer: stored.answer || null,
+    turns: Math.max(
+      0,
+      Math.min(MAX_ANSWER_FOLLOWUP_TURNS, Number(stored.turns) || 0),
+    ),
+    version: Math.max(1, Number(stored.version || stored.taskVersion) || 1),
+    dismissed: Boolean(stored.dismissed),
+    error:
+      wasActive && !canRecoverStageOne && !stored.answer
+        ? "答卷任务恢复失败，请重新提问"
+        : String(stored.error || ""),
+    pendingQuestion: String(stored.pendingQuestion || ""),
+    newQuestionNotice: String(stored.newQuestionNotice || ""),
+    operations:
+      stored.operations && typeof stored.operations === "object"
+        ? { ...stored.operations }
+        : {},
+    pendingOperation: canRecoverStageOne ? pendingOperation : null,
+    captionUpgrade:
+      stored.captionUpgrade?.status === "requested"
+        ? stored.captionUpgrade
+        : null,
+  };
+}
+
+async function ensureAnswerTasksRestored() {
+  if (answerTasksRestorePromise) return answerTasksRestorePromise;
+  answerTasksRestorePromise = (async () => {
+    const stored = await answerStorageArea().get(null);
+    const expired = [];
+    const latestByClient = new Map();
+    for (const [key, value] of Object.entries(stored || {})) {
+      if (!key.startsWith(ANSWER_TASK_STORAGE_PREFIX)) continue;
+      const task = answerTaskFromStored(value);
+      if (!task) {
+        expired.push(key);
+        continue;
+      }
+      answerTasks.set(task.taskId, task);
+      if (!task.dismissed && !["cancelled", "expired"].includes(task.status)) {
+        const current = latestByClient.get(task.clientId);
+        if (!current || task.createdAt > current.createdAt) {
+          latestByClient.set(task.clientId, task);
+        }
+      }
+      if (task.status === "queued" && task.pendingOperation) {
+        queuedAnswerOperations.push({
+          taskId: task.taskId,
+          ...task.pendingOperation,
+        });
+      }
+    }
+    for (const [clientId, task] of latestByClient) {
+      activeAnswerTaskByClient.set(clientId, task.taskId);
+    }
+    if (expired.length) await answerStorageArea().remove(expired);
+    dispatchAnswerOperations();
+  })();
+  return answerTasksRestorePromise;
+}
+
+function trimAnswerOperations(task) {
+  const entries = Object.entries(task.operations || {}).slice(-16);
+  task.operations = Object.fromEntries(entries);
+}
+
+async function finishAnswerTask(task, updates) {
+  Object.assign(task, updates);
+  trimAnswerOperations(task);
+  await persistAnswerTask(task);
+  await broadcastAnswerTask(task);
+}
+
+function answerOperationIsCurrent(task, operation) {
+  return Boolean(
+    task &&
+      !["cancelled", "expired"].includes(task.status) &&
+      Number(operation.taskVersion) === Number(task.version),
+  );
+}
+
+async function runAnswerOperation(operation) {
+  const task = answerTasks.get(operation.taskId);
+  if (!task || answerTaskControllers.has(task.taskId)) return;
+  const phaseKey = answerPhaseKey(operation.operationId, operation.phase);
+  if (!answerOperationIsCurrent(task, operation)) {
+    if (task?.operations?.[phaseKey]) {
+      task.operations[phaseKey] = "discarded";
+      await persistAnswerTask(task);
+    }
+    return;
+  }
+  if (task.operations[phaseKey] === "complete") return;
+  const controller = new AbortController();
+  answerTaskControllers.set(task.taskId, controller);
+  task.operations[phaseKey] = "running";
+  if (operation.phase !== "caption_upgrade") task.status = "running";
+  else if (task.captionUpgrade) task.captionUpgrade.status = "running";
+  task.error = "";
+  try {
+    await persistAnswerTask(task);
+    await broadcastAnswerTask(task);
+    if (!answerOperationIsCurrent(task, operation)) return;
+    const { deepseek_api_key: apiKey } =
+      await chrome.storage.local.get("deepseek_api_key");
+    const question =
+      operation.phase === "initial" ? task.question : operation.question;
+    const result = await YouTubeSummary.requestSingleShotAnswer(
+      {
+        originalQuestion: task.question,
+        question,
+      },
+      {
+        phase: operation.phase,
+        summaryText: task.summaryText,
+        validTs: task.validTs,
+        existingAnswer: task.answer,
+        captionText: operation.captionText || "",
+      },
+      {
+        apiKey,
+        baseUrl: DEFAULT_BASE_URL,
+        targetLanguage: task.targetLanguage,
+        signal: controller.signal,
+      },
+    );
+    // 版本必须在模型返回、写入前再次校验，防止旧升级覆盖新追问。
+    if (!answerOperationIsCurrent(task, operation)) {
+      task.operations[phaseKey] = "discarded";
+      await persistAnswerTask(task);
+      return;
+    }
+    if (result.scope === "new_question") {
+      task.operations[phaseKey] = "complete";
+      await finishAnswerTask(task, {
+        status: "ready",
+        pendingQuestion: "",
+        pendingOperation: null,
+        newQuestionNotice: result.notice,
+        error: "",
+      });
+      return;
+    }
+    if (operation.phase === "caption_upgrade") {
+      task.operations[phaseKey] = "complete";
+      await finishAnswerTask(task, {
+        status: "ready",
+        answer: {
+          directAnswer: result.directAnswer,
+          evidenceTs: result.evidenceTs,
+          steps: result.steps,
+          uncertain: result.uncertain,
+          notice: result.notice,
+          usedCaptions: true,
+        },
+        captionUpgrade: {
+          ...task.captionUpgrade,
+          status: "complete",
+        },
+        pendingOperation: null,
+        error: "",
+      });
+      return;
+    }
+    const isFollowup = operation.phase === "followup";
+    const answer =
+      result.action === "need_captions"
+        ? result.fallbackAnswer
+        : {
+            directAnswer: result.directAnswer,
+            evidenceTs: result.evidenceTs,
+            steps: result.steps,
+            uncertain: result.uncertain,
+            notice: result.notice,
+            usedCaptions: false,
+          };
+    task.operations[phaseKey] = "complete";
+    await finishAnswerTask(task, {
+      status: "ready",
+      answer,
+      initialAnswer: isFollowup ? task.initialAnswer : answer,
+      turns: isFollowup
+        ? Math.min(MAX_ANSWER_FOLLOWUP_TURNS, task.turns + 1)
+        : task.turns,
+      pendingQuestion: "",
+      pendingOperation: null,
+      newQuestionNotice: "",
+      captionUpgrade:
+        result.action === "need_captions"
+          ? {
+              status: "requested",
+              operationId: operation.operationId,
+              taskVersion: task.version,
+              retrieval: result.retrieval,
+              question: operation.question,
+            }
+          : null,
+      error: "",
+    });
+  } catch (error) {
+    if (!answerOperationIsCurrent(task, operation)) return;
+    task.operations[phaseKey] = controller.signal.aborted
+      ? "cancelled"
+      : "failed";
+    if (operation.phase === "caption_upgrade" && task.answer) {
+      await finishAnswerTask(task, {
+        status: "ready",
+        captionUpgrade: task.captionUpgrade
+          ? { ...task.captionUpgrade, status: "failed" }
+          : null,
+        pendingOperation: null,
+        error: "",
+      });
+    } else if (controller.signal.aborted || task.status === "cancelled") {
+      await finishAnswerTask(task, {
+        status: "cancelled",
+        pendingOperation: null,
+        error: "",
+      });
+    } else {
+      await finishAnswerTask(task, {
+        status: "failed",
+        pendingOperation: null,
+        pendingQuestion: "",
+        error: error?.message || "答卷生成失败，请重试",
+      });
+    }
+  } finally {
+    answerTaskControllers.delete(task.taskId);
+    dispatchAnswerOperations();
+  }
+}
+
+function dispatchAnswerOperations() {
+  while (
+    answerTaskControllers.size < MAX_CONCURRENT_ANSWERS &&
+    queuedAnswerOperations.length
+  ) {
+    const operation = queuedAnswerOperations.shift();
+    const task = answerTasks.get(operation.taskId);
+    if (!answerOperationIsCurrent(task, operation)) continue;
+    void runAnswerOperation(operation);
+  }
+}
+
+function queueAnswerOperation(task, operation) {
+  const phaseKey = answerPhaseKey(operation.operationId, operation.phase);
+  if (["queued", "running", "complete"].includes(task.operations[phaseKey])) {
+    return;
+  }
+  task.operations[phaseKey] = "queued";
+  queuedAnswerOperations.push({ taskId: task.taskId, ...operation });
+  dispatchAnswerOperations();
+}
+
+async function loadAnswerSummary(videoId, targetLanguage) {
+  const key = YouTubeSummary.summaryCacheKey(videoId, targetLanguage);
+  const stored = await chrome.storage.local.get(key);
+  const summary = stored[key];
+  if (
+    summary?.videoId !== videoId ||
+    summary?.schemaVersion !== YouTubeSummary.SUMMARY_SCHEMA_VERSION ||
+    summary?.promptVersion !== YouTubeSummary.SUMMARY_PROMPT_VERSION ||
+    YouTubeSummary.normalizeSummaryLanguage(summary?.targetLanguage) !==
+      targetLanguage ||
+    !Array.isArray(summary?.points) ||
+    !summary.points.length
+  ) {
+    throw new Error("当前视频摘要尚未生成完成");
+  }
+  return summary;
+}
+
+async function cancelAnswerTask(task, reason = "cancelled") {
+  if (!task) return null;
+  removeQueuedAnswerOperations(task.taskId);
+  task.version += 1;
+  task.status = "cancelled";
+  task.pendingOperation = null;
+  task.captionUpgrade = null;
+  task.error = "";
+  task.cancelReason = limitedExplanationText(reason, 120);
+  answerTaskControllers.get(task.taskId)?.abort();
+  if (activeAnswerTaskByClient.get(task.clientId) === task.taskId) {
+    activeAnswerTaskByClient.delete(task.clientId);
+  }
+  await persistAnswerTask(task);
+  await broadcastAnswerTask(task);
+  return answerTaskSnapshot(task);
+}
+
+async function startAnswer(payload) {
+  await ensureAnswerTasksRestored();
+  const clientId = limitedExplanationText(payload?.clientId, 128);
+  const videoId = String(payload?.videoId || "").trim();
+  const question = limitedExplanationText(payload?.question, 200);
+  if (!clientId) throw new Error("答卷会话信息无效");
+  if (!videoId) throw new Error("当前视频信息已失效");
+  if (!question) throw new Error("请先输入问题");
+  const targetLanguage = YouTubeSummary.normalizeSummaryLanguage(
+    payload?.targetLanguage,
+  );
+  const summary = await loadAnswerSummary(videoId, targetLanguage);
+  const context = YouTubeSummary.buildAnswerSummaryContext(summary, question);
+  const answerKey = hashExplanationFingerprint(
+    [
+      videoId,
+      targetLanguage,
+      YouTubeSummary.normalizeAnswerQuestion(question),
+      YouTubeSummary.ANSWER_PROMPT_VERSION,
+      context.summaryFingerprint,
+    ].join("\u001f"),
+  );
+  const activeId = activeAnswerTaskByClient.get(clientId);
+  const active = activeId ? answerTasks.get(activeId) : null;
+  if (
+    active &&
+    active.videoId === videoId &&
+    active.targetLanguage === targetLanguage &&
+    YouTubeSummary.normalizeAnswerQuestion(active.question) ===
+      YouTubeSummary.normalizeAnswerQuestion(question) &&
+    active.answerKey === answerKey &&
+    !active.dismissed &&
+    !["cancelled", "expired"].includes(active.status)
+  ) {
+    if (active.status === "failed" && !active.answer) {
+      active.version += 1;
+      const retryOperationId =
+        limitedExplanationText(payload?.operationId, 128) ||
+        `${active.taskId}-retry-${active.version}`;
+      active.status = "queued";
+      active.error = "";
+      active.pendingOperation = {
+        operationId: retryOperationId,
+        phase: "initial",
+        taskVersion: active.version,
+        question,
+      };
+      await persistAnswerTask(active);
+      queueAnswerOperation(active, active.pendingOperation);
+    }
+    return answerTaskSnapshot(active);
+  }
+  if (active) await cancelAnswerTask(active, "superseded");
+  const now = Date.now();
+  const taskId = `answer-${now.toString(36)}-${hashExplanationFingerprint(
+    `${clientId}:${videoId}:${question}:${now}:${Math.random()}`,
+  )}`;
+  const operationId =
+    limitedExplanationText(payload?.operationId, 128) || `${taskId}-initial`;
+  const cachedTask = [...answerTasks.values()]
+    .filter((candidate) => candidate.answerKey === answerKey && candidate.initialAnswer)
+    .sort((left, right) => right.updatedAt - left.updatedAt)[0];
+  const cachedAnswer = cachedTask?.initialAnswer || null;
+  const task = {
+    taskId,
+    clientId,
+    sourceTabId: Number.isInteger(payload?.sourceTabId)
+      ? payload.sourceTabId
+      : null,
+    videoId,
+    videoTitle:
+      limitedExplanationText(payload?.videoTitle, 500) ||
+      `YouTube 视频 ${videoId}`,
+    targetLanguage,
+    question,
+    answer: cachedAnswer,
+    initialAnswer: cachedAnswer,
+    turns: 0,
+    version: 1,
+    dismissed: false,
+    status: cachedAnswer ? "ready" : "queued",
+    error: "",
+    pendingQuestion: "",
+    newQuestionNotice: "",
+    summaryText: context.text,
+    validTs: context.validTs,
+    summaryFingerprint: context.summaryFingerprint,
+    answerKey,
+    operations: {},
+    captionUpgrade: null,
+    pendingOperation: cachedAnswer
+      ? null
+      : {
+          operationId,
+          phase: "initial",
+          taskVersion: 1,
+          question,
+        },
+    createdAt: now,
+    updatedAt: now,
+  };
+  answerTasks.set(taskId, task);
+  activeAnswerTaskByClient.set(clientId, taskId);
+  await persistAnswerTask(task);
+  if (task.pendingOperation) queueAnswerOperation(task, task.pendingOperation);
+  return answerTaskSnapshot(task);
+}
+
+async function askAnswerFollowup(payload) {
+  await ensureAnswerTasksRestored();
+  const task = answerTasks.get(String(payload?.taskId || ""));
+  if (!task) throw new Error("答卷会话已失效，请重新提问");
+  const question = limitedExplanationText(payload?.question, 200);
+  if (!question) throw new Error("请先输入追问");
+  const operationId = limitedExplanationText(payload?.operationId, 128);
+  if (!operationId) throw new Error("追问操作标识无效");
+  const phaseKey = answerPhaseKey(operationId, "followup");
+  if (task.operations[phaseKey]) return answerTaskSnapshot(task);
+  if (!task.answer) throw new Error("请等待首份答卷完成");
+  if (task.turns >= MAX_ANSWER_FOLLOWUP_TURNS) {
+    throw new Error("这份答卷已完成 2 轮追问");
+  }
+  const expectedTurn = Math.max(0, Number(payload?.expectedTurn) || 0);
+  if (task.turns !== expectedTurn) return answerTaskSnapshot(task);
+  if (["queued", "running"].includes(task.status)) {
+    throw new Error("上一轮问题仍在回答中");
+  }
+  task.version += 1;
+  answerTaskControllers.get(task.taskId)?.abort();
+  removeQueuedAnswerOperations(task.taskId);
+  task.status = "queued";
+  task.dismissed = false;
+  task.error = "";
+  task.pendingQuestion = question;
+  task.newQuestionNotice = "";
+  task.captionUpgrade = null;
+  task.pendingOperation = {
+    operationId,
+    phase: "followup",
+    taskVersion: task.version,
+    question,
+  };
+  activeAnswerTaskByClient.set(task.clientId, task.taskId);
+  await persistAnswerTask(task);
+  queueAnswerOperation(task, task.pendingOperation);
+  return answerTaskSnapshot(task);
+}
+
+async function continueAnswerWithCaptions(payload) {
+  await ensureAnswerTasksRestored();
+  const task = answerTasks.get(String(payload?.taskId || ""));
+  if (!task) throw new Error("答卷会话已失效，请重新提问");
+  const operationId = limitedExplanationText(payload?.operationId, 128);
+  const taskVersion = Math.max(1, Number(payload?.taskVersion) || 0);
+  const phaseKey = answerPhaseKey(operationId, "caption_upgrade");
+  if (task.operations[phaseKey]) return answerTaskSnapshot(task);
+  if (
+    !task.captionUpgrade ||
+    task.captionUpgrade.operationId !== operationId ||
+    taskVersion !== task.version ||
+    taskVersion !== task.captionUpgrade.taskVersion
+  ) {
+    return answerTaskSnapshot(task);
+  }
+  const captionContext = YouTubeSummary.buildAnswerCaptionWindow(
+    payload?.segments,
+    task.captionUpgrade.retrieval,
+  );
+  if (!captionContext.text) {
+    task.captionUpgrade.status = "unavailable";
+    await persistAnswerTask(task);
+    await broadcastAnswerTask(task);
+    return answerTaskSnapshot(task);
+  }
+  const operation = {
+    operationId,
+    phase: "caption_upgrade",
+    taskVersion,
+    question: task.captionUpgrade.question,
+    captionText: captionContext.text,
+  };
+  task.captionUpgrade.status = "queued";
+  task.pendingOperation = null;
+  await persistAnswerTask(task);
+  queueAnswerOperation(task, operation);
+  return answerTaskSnapshot(task);
+}
+
+async function getAnswerTask(message) {
+  await ensureAnswerTasksRestored();
+  const taskId = String(message?.taskId || "");
+  if (taskId) {
+    const task = answerTasks.get(taskId);
+    return task ? answerTaskSnapshot(task) : null;
+  }
+  const clientId = String(message?.clientId || "");
+  const activeId = activeAnswerTaskByClient.get(clientId);
+  const task = activeId ? answerTasks.get(activeId) : null;
+  if (
+    !task ||
+    task.dismissed ||
+    (message?.videoId && task.videoId !== message.videoId) ||
+    (message?.sourceTabId !== undefined &&
+      Number.isInteger(task.sourceTabId) &&
+      task.sourceTabId !== message.sourceTabId)
+  ) {
+    return null;
+  }
+  return answerTaskSnapshot(task);
+}
+
+async function clearAnswer(taskId) {
+  await ensureAnswerTasksRestored();
+  const task = answerTasks.get(String(taskId || ""));
+  if (!task) return null;
+  task.dismissed = true;
+  if (activeAnswerTaskByClient.get(task.clientId) === task.taskId) {
+    activeAnswerTaskByClient.delete(task.clientId);
+  }
+  await persistAnswerTask(task);
+  return answerTaskSnapshot(task);
 }
 
 function attachOverviewSubscriber(job, tabId) {
@@ -1651,6 +2302,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message?.type === "SAVE_ANSWER_CLIPPING") {
+    saveAnswerClipping(message.payload)
+      .then((result) => sendResponse({ ok: true, ...result }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "收藏答卷失败，请重试",
+        }),
+      );
+    return true;
+  }
+
   if (message?.type === "DELETE_CLIPPING") {
     deleteClipping(message.id)
       .then((result) => sendResponse({ ok: true, ...result }))
@@ -1794,6 +2457,86 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         error: error?.message || "默认推荐生成失败",
       }),
     );
+    return true;
+  }
+
+  if (message?.type === "START_ANSWER") {
+    startAnswer(message.payload)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "答卷生成失败，请重试",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "ASK_ANSWER_FOLLOWUP") {
+    askAnswerFollowup(message.payload)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "追问失败，请重试",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "CONTINUE_ANSWER_WITH_CAPTIONS") {
+    continueAnswerWithCaptions(message.payload)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "字幕升级失败",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "GET_ANSWER_TASK") {
+    getAnswerTask(message)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "读取答卷任务失败",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "CLEAR_ANSWER") {
+    clearAnswer(message.taskId)
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "清除答卷失败",
+        }),
+      );
+    return true;
+  }
+
+  if (message?.type === "CANCEL_ANSWER") {
+    ensureAnswerTasksRestored()
+      .then(() => {
+        const task = message.taskId
+          ? answerTasks.get(String(message.taskId))
+          : answerTasks.get(
+              activeAnswerTaskByClient.get(String(message.clientId || "")),
+            );
+        return cancelAnswerTask(task, message.reason);
+      })
+      .then((task) => sendResponse({ ok: true, task }))
+      .catch((error) =>
+        sendResponse({
+          ok: false,
+          error: error?.message || "取消答卷失败",
+        }),
+      );
     return true;
   }
 

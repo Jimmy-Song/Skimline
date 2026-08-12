@@ -8,6 +8,10 @@
   const MAX_VISIBLE_CLIPPINGS = 1000;
   const MIN_SELECTION_CHARS = 2;
   const MAX_SELECTION_CHARS = 200;
+  const MAX_ANSWER_QUESTION_CHARS = 200;
+  const MAX_ANSWER_DIRECT_CHARS = 2000;
+  const MAX_ANSWER_STEP_CHARS = 500;
+  const MAX_ANSWER_NOTICE_CHARS = 200;
   const SOURCE_TYPES = new Set([
     "overview",
     "claim",
@@ -149,6 +153,103 @@
     };
   }
 
+  function normalizeAnswerQuestion(value) {
+    return normalizeClippingText(value)
+      .toLocaleLowerCase()
+      .replace(/[?？。.!！]+$/g, "")
+      .trim();
+  }
+
+  function normalizeAnswerTimestamps(value, limit = 3) {
+    const seen = new Set();
+    return (Array.isArray(value) ? value : [])
+      .filter((timestamp) => Number.isFinite(Number(timestamp)))
+      .map((timestamp) => Math.max(0, Math.floor(Number(timestamp))))
+      .filter((timestamp) => {
+        if (seen.has(timestamp)) return false;
+        seen.add(timestamp);
+        return true;
+      })
+      .slice(0, limit);
+  }
+
+  function normalizeAnswerSteps(value) {
+    return (Array.isArray(value) ? value : [])
+      .map((step) => ({
+        text: normalizeClippingText(step?.text).slice(0, MAX_ANSWER_STEP_CHARS),
+        sourceTs: normalizeAnswerTimestamps(step?.sourceTs, 3),
+      }))
+      .filter((step) => step.text && step.sourceTs.length)
+      .slice(0, 5);
+  }
+
+  function answerSelectedText(directAnswer) {
+    return [...`答卷：${normalizeClippingText(directAnswer)}`]
+      .slice(0, MAX_SELECTION_CHARS)
+      .join("");
+  }
+
+  function normalizeStoredAnswer(value) {
+    const id = normalizeClippingId(value?.id);
+    const videoId = normalizeVideoId(value?.videoId);
+    const savedAt = Math.max(0, Math.floor(Number(value?.savedAt) || 0));
+    const question = normalizeClippingText(value?.question).slice(
+      0,
+      MAX_ANSWER_QUESTION_CHARS,
+    );
+    const directAnswer = normalizeClippingText(value?.directAnswer).slice(
+      0,
+      MAX_ANSWER_DIRECT_CHARS,
+    );
+    const evidenceTs = normalizeAnswerTimestamps(value?.evidenceTs, 3);
+    const steps = normalizeAnswerSteps(value?.steps);
+    if (
+      !id ||
+      !videoId ||
+      !savedAt ||
+      !question ||
+      !directAnswer ||
+      (!evidenceTs.length && !steps.length)
+    ) {
+      return null;
+    }
+    const firstStepT = steps[0]?.sourceTs?.[0];
+    const anchorT = Number.isFinite(firstStepT) ? firstStepT : evidenceTs[0];
+    return {
+      kind: "answer",
+      id,
+      videoId,
+      videoTitle:
+        normalizeClippingText(value?.videoTitle).slice(0, 300) ||
+        `YouTube 视频 ${videoId}`,
+      targetLanguage: String(value?.targetLanguage || "")
+        .trim()
+        .slice(0, 32),
+      question,
+      directAnswer,
+      evidenceTs,
+      steps,
+      uncertain: Boolean(value?.uncertain),
+      notice: normalizeClippingText(value?.notice).slice(
+        0,
+        MAX_ANSWER_NOTICE_CHARS,
+      ),
+      usedCaptions: Boolean(value?.usedCaptions),
+      anchorT,
+      selectedText: answerSelectedText(directAnswer),
+      sourceType: "claim",
+      pointText: "",
+      sectionTitle: "",
+      savedAt,
+    };
+  }
+
+  function normalizeStoredItem(value) {
+    return value?.kind === "answer"
+      ? normalizeStoredAnswer(value)
+      : normalizeStoredClipping(value);
+  }
+
   function createClipping(input, options = {}) {
     const selectedText = normalizeClippingText(input?.selectedText);
     const videoId = normalizeVideoId(input?.videoId);
@@ -172,9 +273,36 @@
     });
   }
 
+  function createAnswerClipping(input, options = {}) {
+    const now = Math.max(1, Math.floor(Number(options.now) || Date.now()));
+    const videoId = normalizeVideoId(input?.videoId);
+    const fallbackId = `answer-${videoId}-${now}-${Math.random()
+      .toString(36)
+      .slice(2)}`;
+    const answer = normalizeStoredAnswer({
+      ...input,
+      kind: "answer",
+      id:
+        options.id ||
+        root.crypto?.randomUUID?.() ||
+        fallbackId,
+      savedAt: now,
+    });
+    if (!answer) throw new Error("答卷内容无效");
+    return answer;
+  }
+
   function clippingDedupeKey(item) {
-    const normalized = normalizeStoredClipping(item);
+    const normalized = normalizeStoredItem(item);
     if (!normalized) return "";
+    if (normalized.kind === "answer") {
+      return JSON.stringify([
+        "answer",
+        normalized.videoId,
+        normalized.targetLanguage,
+        normalizeAnswerQuestion(normalized.question),
+      ]);
+    }
     return JSON.stringify([
       normalized.videoId,
       normalized.anchorT,
@@ -230,7 +358,7 @@
         ? value.items
         : [];
     for (const rawItem of rawAdds) {
-      const item = normalizeStoredClipping(rawItem);
+      const item = normalizeStoredItem(rawItem);
       if (!item) continue;
       const existing = addsById.get(item.id);
       addsById.set(
@@ -335,7 +463,7 @@
   function buildClippingsView(items) {
     const byId = new Map();
     for (const rawItem of Array.isArray(items) ? items : []) {
-      const item = normalizeStoredClipping(rawItem);
+      const item = normalizeStoredItem(rawItem);
       if (!item) continue;
       const existing = byId.get(item.id);
       byId.set(
@@ -360,7 +488,7 @@
 
   function addClipping(storeValue, itemValue) {
     const store = normalizeReplicaState(storeValue);
-    const item = normalizeStoredClipping(itemValue);
+    const item = normalizeStoredItem(itemValue);
     if (!item) throw new Error("收藏内容无效");
     const key = clippingDedupeKey(item);
     const existing = listClippings([store]).find(
@@ -388,6 +516,42 @@
     };
   }
 
+  function upsertAnswerClipping(storeValue, itemValue) {
+    const store = normalizeReplicaState(storeValue);
+    const item = normalizeStoredAnswer(itemValue);
+    if (!item) throw new Error("答卷内容无效");
+    const targetKey = clippingDedupeKey(item);
+    const replacedIds = materializeLiveItems([store])
+      .filter(
+        (candidate) =>
+          candidate.id !== item.id &&
+          candidate.kind === "answer" &&
+          clippingDedupeKey(candidate) === targetKey,
+      )
+      .map((candidate) => candidate.id);
+    if (store.removes.includes(item.id)) {
+      throw new Error("已删除的答卷标识不能重复使用");
+    }
+    const sameId = store.adds.find((candidate) => candidate.id === item.id);
+    if (sameId && JSON.stringify(sameId) !== JSON.stringify(item)) {
+      throw new Error("答卷标识冲突");
+    }
+    const nextAdds = [
+      item,
+      ...store.adds.filter((candidate) => candidate.id !== item.id),
+    ];
+    return {
+      store: normalizeReplicaState({
+        ...store,
+        revision: store.revision + 1,
+        adds: nextAdds,
+        removes: [...store.removes, ...replacedIds],
+      }),
+      item,
+      replacedIds: [...new Set(replacedIds)].sort(compareStrings),
+    };
+  }
+
   function removeClipping(storeValue, id, observedStates = [storeValue]) {
     const store = normalizeReplicaState(storeValue);
     const liveItems = materializeLiveItems([store, ...observedStates]);
@@ -411,8 +575,16 @@
   }
 
   function restoreClipping(storeValue, itemValue, options = {}) {
-    const snapshot = normalizeStoredClipping(itemValue);
+    const snapshot = normalizeStoredItem(itemValue);
     if (!snapshot) throw new Error("收藏内容无效");
+    if (snapshot.kind === "answer") {
+      const restored = createAnswerClipping(snapshot, {
+        id: options.id,
+        now: snapshot.savedAt,
+      });
+      const result = upsertAnswerClipping(storeValue, restored);
+      return { ...result, duplicate: false };
+    }
     const restored = createClipping(snapshot, {
       id: options.id,
       now: snapshot.savedAt,
@@ -425,7 +597,15 @@
     const view = buildClippingsView(items);
     if (!query) return view;
     return view.filter((item) =>
-      clippingMatchesFields(item, query, CLIPPING_SEARCH_FIELDS),
+      item.kind === "answer"
+        ? [
+            item.question,
+            item.directAnswer,
+            item.notice,
+            ...item.steps.map((step) => step.text),
+            item.videoTitle,
+          ].some((value) => normalizeSearchText(value).includes(query))
+        : clippingMatchesFields(item, query, CLIPPING_SEARCH_FIELDS),
     );
   }
 
@@ -454,7 +634,7 @@
     ) {
       throw new Error("这不是有效的 Skimline 收藏备份");
     }
-    const normalizedAdds = value.adds.map(normalizeStoredClipping);
+    const normalizedAdds = value.adds.map(normalizeStoredItem);
     const normalizedRemoves = value.removes.map(normalizeClippingId);
     const rawVideoTitles = Array.isArray(value?.videoTitles)
       ? value.videoTitles
@@ -558,7 +738,20 @@
           !query || titleMatched
             ? group.allItems
             : group.allItems.filter((item) =>
-                clippingMatchesFields(item, query, CLIPPING_CONTENT_FIELDS),
+                item.kind === "answer"
+                  ? [
+                      item.question,
+                      item.directAnswer,
+                      item.notice,
+                      ...item.steps.map((step) => step.text),
+                    ].some((value) =>
+                      normalizeSearchText(value).includes(query),
+                    )
+                  : clippingMatchesFields(
+                      item,
+                      query,
+                      CLIPPING_CONTENT_FIELDS,
+                    ),
               );
         return {
           videoId: group.videoId,
@@ -588,9 +781,11 @@
     MAX_VISIBLE_CLIPPINGS,
     MIN_SELECTION_CHARS,
     addClipping,
+    answerSelectedText,
     buildClippingsView,
     clippingDedupeKey,
     createClipping,
+    createAnswerClipping,
     createClippingsBackup,
     groupClippingsByVideo,
     importClippingsBackup,
@@ -607,6 +802,7 @@
     searchClippings,
     upsertVideoTitle,
     videoTitleEntryKey,
+    upsertAnswerClipping,
   };
 
   root.SkimlineCollections = Object.assign(root.SkimlineCollections || {}, api);
